@@ -3,6 +3,7 @@ import sys
 import json
 import subprocess
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -68,9 +69,33 @@ def wait_for_api(health_url, timeout_seconds=300, interval_seconds=5):
     )
 
 
+def build_endpoint_urls(api_url):
+    """Derive the review and health endpoints from a configured API URL.
+
+    The action supports passing either the server root (e.g. https://host)
+    or the review endpoint itself (e.g. https://host/review).
+    """
+    parsed = urlsplit(api_url.rstrip('/'))
+    path = parsed.path or ''
+
+    if path.endswith('/review'):
+        review_path = path
+        health_path = path[:-len('/review')] + '/healthz' or '/healthz'
+    elif path.endswith('/healthz'):
+        review_path = path[:-len('/healthz')] + '/review' or '/review'
+        health_path = path
+    else:
+        review_path = (path + '/review') if path else '/review'
+        health_path = (path + '/healthz') if path else '/healthz'
+
+    review_url = urlunsplit((parsed.scheme, parsed.netloc, review_path, parsed.query, parsed.fragment))
+    health_url = urlunsplit((parsed.scheme, parsed.netloc, health_path, '', ''))
+    return review_url, health_url
+
+
 def main():
     api_url = os.environ['API_URL']
-    health_url = api_url.rstrip('/') + '/healthz'
+    review_url, health_url = build_endpoint_urls(api_url)
 
     # Retry while the tunnel/server is warming up instead of failing immediately on transient 502s.
     try:
@@ -108,7 +133,7 @@ def main():
 
     try:
         response = requests.post(
-            api_url,
+            review_url,
             json=payload,
             headers=headers,
             timeout=(10, 900)
