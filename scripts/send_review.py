@@ -88,8 +88,10 @@ def build_endpoint_urls(api_url):
         review_path = (path + '/review') if path else '/review'
         health_path = (path + '/healthz') if path else '/healthz'
 
-    review_url = urlunsplit((parsed.scheme, parsed.netloc, review_path, parsed.query, parsed.fragment))
-    health_url = urlunsplit((parsed.scheme, parsed.netloc, health_path, '', ''))
+    review_url = urlunsplit(
+        (parsed.scheme, parsed.netloc, review_path, parsed.query, parsed.fragment))
+    health_url = urlunsplit(
+        (parsed.scheme, parsed.netloc, health_path, '', ''))
     return review_url, health_url
 
 
