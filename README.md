@@ -17,6 +17,9 @@
 - 🏷️ **Labels** — automatically adds PR labels such as security and refactoring
 - 📝 **Review Summary** — posts an overall review summary comment on the PR
 
+
+<img width="786" height="791" alt="review" src="https://github.com/user-attachments/assets/0c75c3c7-3693-4b33-a933-c917a34e0989" />
+
 ## 🏗️ Architecture
 
 ```
