@@ -122,6 +122,9 @@ class DeepSeekClient:
             return self._fallback_summary(text), []
 
         summary_data = data.get("summary", {})
+                # Unwrap nested: {"summary": {"summary": ..., "issues": [...]}}
+        if isinstance(summary_data, dict) and "issues" in summary_data and "issues" not in data:
+            data = {"issues": summary_data.pop("issues", []), **data}
         summary = ReviewSummary(
             summary=summary_data.get("summary", "Review completed."),
             issues_found=0,
