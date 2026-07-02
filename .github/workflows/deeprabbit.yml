@@ -19,8 +19,8 @@ jobs:
       - name: DeepRabbit Code Review
         uses: ./
         with:
-                  api_url: ${{ secrets.DEEPRABBIT_URL }}
+          api_url: ${{ secrets.DEEPRABBIT_URL }}
           api_key: ${{ secrets.DEEPRABBIT_API_KEY }}
           deepseek_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-            llm_base_url: ${{ secrets.LLM_BASE_URL }}
+          llm_base_url: ${{ secrets.LLM_BASE_URL }}
