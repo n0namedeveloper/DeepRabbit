@@ -122,13 +122,24 @@ async def review_pr(
         )
         logger.info("comments.generated", count=len(comments))
 
-        # Build a rich overall summary comment (includes issue details/code blocks)
+        # Build a rich overall summary comment (compact) and post detailed
+        # fix-suggestion blocks as separate PR comments to avoid one huge body.
         try:
             summary_markdown = comment_gen.generate_summary_comment(
                 all_issues, llm_summary.overall_comment)
-            llm_summary.overall_comment = summary_markdown
+            # Keep only the top portion (before detailed Fix Suggestions)
+            split_token = "\n### Fix Suggestions"
+            if split_token in summary_markdown:
+                top, _details = summary_markdown.split(split_token, 1)
+                llm_summary.overall_comment = top.strip()
+            else:
+                llm_summary.overall_comment = summary_markdown
+
+            # Prepare per-issue detail blocks and post them as separate comments
+            detail_blocks = comment_gen.generate_detail_blocks(all_issues)
         except Exception:
             logger.warning("comment_generator.summary_failed")
+            detail_blocks = []
 
         # ---------- Phase 6: Post to GitHub ----------
         github = GitHubClient(token=payload.github_token)
@@ -139,6 +150,16 @@ async def review_pr(
             summary=llm_summary,
             comments=comments,
         )
+        # Post detailed per-issue suggestion blocks as separate issue comments
+        if detail_blocks:
+            try:
+                detail_posted = await github.post_detail_comments(
+                    payload.repository, payload.pr_number, detail_blocks
+                )
+                # include count in result metadata
+                posted["detail_comments_posted"] = detail_posted
+            except Exception:
+                logger.warning("github.post_detail_comments_failed")
         logger.info("github.review_posted", result=posted)
 
         # Update PR labels
