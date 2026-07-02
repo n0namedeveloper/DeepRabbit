@@ -106,7 +106,7 @@ class ReviewRequest(BaseModel):
     deepseek_api_key: str
     github_token: str
     review_level: str = "normal"
-        llm_base_url: str = ""
+    llm_base_url: str = ""
 
 
 class ReviewResult(BaseModel):
