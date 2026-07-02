@@ -171,6 +171,42 @@ class CommentGenerator:
                     else:
                         lines.append(f"\n**Suggestion:** {i.suggestion}")
 
+            # Add detailed issue blocks with full code and suggestions
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+            lines.append("### Issue Details")
+            lines.append("")
+
+            for idx, i in enumerate(issues, 1):
+                sev_emoji = SEVERITY_EMOJI.get(i.severity, "⚪")
+                location = f"{i.file}:{i.line}" if i.file and i.line else (
+                    i.file or "unknown")
+
+                lines.append(f"#### {idx}. {sev_emoji} {i.title}")
+                lines.append(
+                    f"**File:** {location} | **Severity:** {_normalize_sev(i.severity).upper()}")
+                lines.append("")
+
+                if i.description:
+                    lines.append(i.description)
+                    lines.append("")
+
+                if i.code_snippet:
+                    lines.append("**Code:**")
+                    lines.append(f"```python\n{i.code_snippet}\n```")
+                    lines.append("")
+
+                if i.suggestion:
+                    suggestion_code = self._extract_suggestion_code(
+                        i.suggestion)
+                    if suggestion_code:
+                        lines.append("**Suggestion:**")
+                        lines.append(f"```python\n{suggestion_code}\n```")
+                    else:
+                        lines.append(f"**Suggestion:** {i.suggestion}")
+                    lines.append("")
+
         return "\n".join(lines)
 
     @staticmethod
