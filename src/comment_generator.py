@@ -171,11 +171,20 @@ class CommentGenerator:
                     else:
                         lines.append(f"\n**Suggestion:** {i.suggestion}")
 
-            # Add detailed issue blocks with full code and suggestions
+            # Add a short "Summary of Key Findings" with bullets
+            lines.append("")
+            lines.append("### Summary of Key Findings:")
+            lines.append("")
+            for i in issues[:10]:
+                short = i.suggestion or i.description or "No details provided."
+                short_line = short.splitlines()[0]
+                lines.append(f"- {i.title}: {short_line}")
+
+            # Add detailed fix suggestion blocks for each issue
             lines.append("")
             lines.append("---")
             lines.append("")
-            lines.append("### Issue Details")
+            lines.append("### Fix Suggestions")
             lines.append("")
 
             for idx, i in enumerate(issues, 1):
@@ -185,7 +194,7 @@ class CommentGenerator:
 
                 lines.append(f"#### {idx}. {sev_emoji} {i.title}")
                 lines.append(
-                    f"**File:** {location} | **Severity:** {_normalize_sev(i.severity).upper()}")
+                    f"**Location:** {location} | **Severity:** {_normalize_sev(i.severity).upper()}")
                 lines.append("")
 
                 if i.description:
@@ -193,7 +202,8 @@ class CommentGenerator:
                     lines.append("")
 
                 if i.code_snippet:
-                    lines.append("**Code:**")
+                    lines.append("**Problematic code:**")
+                    # Preserve full snippet in suggestion blocks
                     lines.append(f"```python\n{i.code_snippet}\n```")
                     lines.append("")
 
@@ -201,10 +211,11 @@ class CommentGenerator:
                     suggestion_code = self._extract_suggestion_code(
                         i.suggestion)
                     if suggestion_code:
-                        lines.append("**Suggestion:**")
-                        lines.append(f"```python\n{suggestion_code}\n```")
+                        lines.append("**Suggested fix (applyable):**")
+                        lines.append(f"```suggestion\n{suggestion_code}\n```")
                     else:
-                        lines.append(f"**Suggestion:** {i.suggestion}")
+                        lines.append("**Suggested fix:**")
+                        lines.append(i.suggestion)
                     lines.append("")
 
         return "\n".join(lines)

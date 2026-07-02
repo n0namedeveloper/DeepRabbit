@@ -99,7 +99,7 @@ async def review_pr(
         # ---------- Phase 3: LLM-Powered Review ----------
         llm = DeepSeekClient(
             api_key=payload.deepseek_api_key,
-                base_url=payload.llm_base_url or settings.llm_base_url,
+            base_url=payload.llm_base_url or settings.llm_base_url,
         )
         llm_summary, llm_issues = await llm.review_diff(
             diff=payload.diff,
@@ -121,6 +121,14 @@ async def review_pr(
             all_issues, payload.file_contents
         )
         logger.info("comments.generated", count=len(comments))
+
+        # Build a rich overall summary comment (includes issue details/code blocks)
+        try:
+            summary_markdown = comment_gen.generate_summary_comment(
+                all_issues, llm_summary.overall_comment)
+            llm_summary.overall_comment = summary_markdown
+        except Exception:
+            logger.warning("comment_generator.summary_failed")
 
         # ---------- Phase 6: Post to GitHub ----------
         github = GitHubClient(token=payload.github_token)
