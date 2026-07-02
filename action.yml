@@ -9,7 +9,7 @@ inputs:
   api_url:
     description: 'DeepRabbit FastAPI server URL'
     required: false
-    default: 'https://api.deeprabbit.dev/review'
+          default: ''
   api_key:
     description: 'API key used to authenticate with the server'
     required: true
