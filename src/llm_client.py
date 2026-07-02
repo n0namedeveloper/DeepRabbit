@@ -3,6 +3,7 @@
 import json
 import re
 import time
+import asyncio
 
 import httpx
 import structlog
@@ -92,19 +93,25 @@ class DeepSeekClient:
             "max_tokens": max_tokens or self.max_tokens,
         }
 
-        try:
-            resp = await self.client.post("/chat/completions", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
-        except httpx.HTTPStatusError as e:
-            body = e.response.text[:500]
-            logger.error("llm.http_error", status=e.response.status_code, body=body)
-            raise
-        except (KeyError, IndexError) as e:
-            logger.error("llm.response_parse_error", error=str(e))
-            raise
-
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = await self.client.post("/chat/completions", json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                return data["choices"][0]["message"]["content"]
+            except httpx.HTTPStatusError as e:
+                body = e.response.text[:500]
+                if e.response.status_code == 429 and attempt < max_retries - 1:
+                    wait = 5 * (2 ** attempt)
+                    logger.warning("llm.rate_limited", attempt=attempt + 1, wait_s=wait)
+                    await asyncio.sleep(wait)
+                    continue
+                logger.error("llm.http_error", status=e.response.status_code, body=body)
+                raise
+            except (KeyError, IndexError) as e:
+                logger.error("llm.response_parse_error", error=str(e))
+                raise
     def _parse_review_response(self, text: str) -> tuple[ReviewSummary, list[Issue]]:
         """Parse JSON review response from LLM."""
         text = self._extract_json(text)
