@@ -1,5 +1,4 @@
 """DeepSeek LLM client for code review."""
-
 import json
 import re
 import time
@@ -53,7 +52,6 @@ class DeepSeekClient:
         duration_ms = int((time.monotonic() - start) * 1000)
 
         logger.info("llm.review.completed", duration_ms=duration_ms, response_length=len(response_text))
-
         summary, issues = self._parse_review_response(response_text)
         return summary, issues
 
@@ -112,6 +110,7 @@ class DeepSeekClient:
             except (KeyError, IndexError) as e:
                 logger.error("llm.response_parse_error", error=str(e))
                 raise
+
     def _parse_review_response(self, text: str) -> tuple[ReviewSummary, list[Issue]]:
         """Parse JSON review response from LLM."""
         text = self._extract_json(text)
@@ -121,10 +120,39 @@ class DeepSeekClient:
             logger.warning("llm.invalid_json", text=text[:200])
             return self._fallback_summary(text), []
 
-        summary_data = data.get("summary", {})
-                # Unwrap nested: {"summary": {"summary": ..., "issues": [...]}}
-        if isinstance(summary_data, dict) and "issues" in summary_data and "issues" not in data:
-            data = {"issues": summary_data.pop("issues", []), **data}
+        logger.info("llm.parsed_keys", keys=list(data.keys()) if isinstance(data, dict) else str(type(data)))
+
+        # Normalise: find issues list wherever it lives
+        issues_list = None
+        summary_data = {}
+
+        if isinstance(data, dict):
+            # Case 1: top-level {"issues": [...], "summary": {...}}
+            if "issues" in data:
+                issues_list = data["issues"]
+                summary_data = data.get("summary", {})
+                if not isinstance(summary_data, dict):
+                    summary_data = {}
+            # Case 2: {"summary": {"summary": "...", "issues": [...], "rating": "..."}}
+            elif "summary" in data and isinstance(data["summary"], dict):
+                inner = data["summary"]
+                issues_list = inner.get("issues", [])
+                summary_data = {k: v for k, v in inner.items() if k != "issues"}
+            # Case 3: flat dict that is the summary itself with issues inside
+            elif "issues" not in data:
+                # Search all dict values for a list that looks like issues
+                for v in data.values():
+                    if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict):
+                        issues_list = v
+                        break
+                summary_data = {k: v for k, v in data.items() if not isinstance(v, list)}
+
+        if issues_list is None:
+            issues_list = []
+
+        if not isinstance(summary_data, dict):
+            summary_data = {}
+
         summary = ReviewSummary(
             summary=summary_data.get("summary", "Review completed."),
             issues_found=0,
@@ -133,7 +161,7 @@ class DeepSeekClient:
         )
 
         issues = []
-        for item in data.get("issues", []):
+        for item in issues_list:
             try:
                 issue = Issue(
                     type=IssueType(item.get("type", "code_smell")),
@@ -163,6 +191,12 @@ class DeepSeekClient:
         summary.security_count = sum(1 for i in issues if i.type == IssueType.SECURITY)
         summary.refactoring_suggestions = sum(1 for i in issues if i.type == IssueType.REFACTORING)
 
+        logger.info(
+            "llm.parse_complete",
+            issues_found=len(issues),
+            critical=summary.critical_count,
+            high=summary.high_count,
+        )
         return summary, issues
 
     @staticmethod
