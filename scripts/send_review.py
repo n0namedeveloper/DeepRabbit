@@ -16,7 +16,7 @@ def get_diff():
 def get_files():
     result = subprocess.run(
         ['git', 'diff', '--name-status',
-            os.environ['BASE_SHA'], os.environ['HEAD_SHA']],
+             os.environ['BASE_SHA'], os.environ['HEAD_SHA']],
         capture_output=True, text=True
     )
     files = []
@@ -59,7 +59,7 @@ def main():
         'file_contents': file_contents,
         'deepseek_api_key': os.environ['DEEPSEEK_KEY'],
         'github_token': os.environ['GITHUB_TOKEN'],
-        'review_level': os.environ['REVIEW_LEVEL']
+        'review_level': os.environ['REVIEW_LEVEL'],
         'llm_base_url': os.environ.get('LLM_BASE_URL', ''),
     }
 
@@ -77,22 +77,17 @@ def main():
         )
         response.raise_for_status()
         result = response.json()
-
         print("✅ Review completed!")
         print(f"Summary: {result.get('summary', 'N/A')}")
         print(f"Issues found: {result.get('issues_count', 0)}")
         print(f"Comments posted: {result.get('comments_posted', 0)}")
-
         if result.get('issues_count', 0) > 0:
             print("\n📝 Issues found:")
             for issue in result.get('issues', [])[:10]:
                 severity = issue.get('severity', 'unknown')
                 icon = '🔴' if severity == 'high' else '🟡' if severity == 'medium' else '🟢'
-                print(
-                    f"  {icon} [{severity.upper()}] {issue.get('title', '')}")
-                print(
-                    f"     File: {issue.get('file', 'unknown')}, Line: {issue.get('line', 'N/A')}")
-
+                print(f"  {icon} [{severity.upper()}] {issue.get('title', '')}")
+                print(f"     File: {issue.get('file', 'unknown')}, Line: {issue.get('line', 'N/A')}")
     except requests.exceptions.HTTPError as e:
         print(f"❌ HTTP Error: {e}")
         try:
