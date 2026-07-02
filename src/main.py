@@ -99,7 +99,7 @@ async def review_pr(
         # ---------- Phase 3: LLM-Powered Review ----------
         llm = DeepSeekClient(
             api_key=payload.deepseek_api_key,
-            base_url=settings.llm_base_url,
+                base_url=payload.llm_base_url or settings.llm_base_url,
         )
         llm_summary, llm_issues = await llm.review_diff(
             diff=payload.diff,
