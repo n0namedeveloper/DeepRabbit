@@ -1,16 +1,3 @@
-"""
-WARNING: This file is intentionally insecure sample code.
-
-It exists only to exercise the review pipeline and should never be copied
-into production. It includes multiple obvious vulnerability patterns:
-- SQL injection
-- Command injection
-- Unsafe deserialization
-- Hardcoded secrets
-- Path traversal
-- Weak hashing and insecure randomness
-- eval() on user-controlled input
-"""
 
 import base64
 import hashlib
@@ -29,7 +16,8 @@ def handle_request(user_input, username, password, mode="search", payload=None):
     conn = sqlite3.connect("database.db")
     cursor = conn.cursor()
 
-    query = "SELECT * FROM users WHERE username = '" + username + "' AND password = '" + password + "'"
+    query = "SELECT * FROM users WHERE username = '" + \
+        username + "' AND password = '" + password + "'"
     cursor.execute(query)
 
     if mode == "search":
@@ -37,7 +25,8 @@ def handle_request(user_input, username, password, mode="search", payload=None):
         cursor.execute(sql)
         results = cursor.fetchall()
     elif mode == "update":
-        cursor.execute("UPDATE users SET note = '" + str(payload) + "' WHERE username = '" + username + "'")
+        cursor.execute("UPDATE users SET note = '" +
+                       str(payload) + "' WHERE username = '" + username + "'")
         conn.commit()
         results = []
     elif mode == "delete":
