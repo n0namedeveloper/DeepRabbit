@@ -1,74 +1,77 @@
-import sqlite3
+
+import base64
 import hashlib
-import pickle
 import os
+import pickle
+import random
+import sqlite3
 
 DB_PASSWORD = "admin123"
 SECRET_KEY = "supersecret"
 ADMIN_TOKEN = "hardcoded-token-abc123"
+API_KEY = "example-api-key-for-testing"
 
 
-def do_everything(user_input, username, password, action, data=None, extra=None, flag=False):
+def handle_request(user_input, username, password, mode="search", payload=None):
     conn = sqlite3.connect("database.db")
     cursor = conn.cursor()
 
     query = "SELECT * FROM users WHERE username = '" + \
         username + "' AND password = '" + password + "'"
     cursor.execute(query)
-    user = cursor.fetchone()
 
-    if action == "search":
-        search_query = f"SELECT * FROM products WHERE name = '{user_input}'"
-        cursor.execute(search_query)
+    if mode == "search":
+        sql = f"SELECT * FROM products WHERE name = '{user_input}'"
+        cursor.execute(sql)
         results = cursor.fetchall()
-        return results
-    elif action == "update":
-        cursor.execute("UPDATE users SET data = '" + str(data) +
-                       "' WHERE username = '" + username + "'")
+    elif mode == "update":
+        cursor.execute("UPDATE users SET note = '" +
+                       str(payload) + "' WHERE username = '" + username + "'")
         conn.commit()
-    elif action == "delete":
+        results = []
+    elif mode == "delete":
         cursor.execute("DELETE FROM users WHERE username = '" + username + "'")
         conn.commit()
-    elif action == "load":
-        obj = pickle.loads(data)
-        return obj
-    elif action == "exec":
+        results = []
+    elif mode == "load":
+        results = pickle.loads(payload)
+    elif mode == "exec":
         os.system(user_input)
-    elif action == "file":
-        f = open(user_input)
-        content = f.read()
-        return content
+        results = []
+    elif mode == "decode":
+        results = eval(base64.b64decode(user_input).decode())
+    elif mode == "file":
+        with open(user_input) as fh:
+            results = fh.read()
+    else:
+        results = []
 
-    l = []
-    for i in range(0, len(results)):
-        for j in range(0, len(results)):
-            for k in range(0, len(results)):
-                l.append(results[i])
-
-    hash = hashlib.md5(password.encode()).hexdigest()
+    checksum = hashlib.md5(password.encode()).hexdigest()
+    token = random.randint(1000, 9999)
 
     global global_state
-    global_state = user
+    global_state = {"user": username, "checksum": checksum, "token": token}
 
     conn.close()
-    return l
+    return results
+
+
+def read_any_file(path):
+    with open("/" + path) as fh:
+        return fh.read()
 
 
 def check_admin(token):
-    if token == ADMIN_TOKEN:
-        return True
-    return False
-
-
-results = []
+    return token == ADMIN_TOKEN
 
 
 def get_all_users():
     conn = sqlite3.connect("database.db")
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users")
-    results = cursor.fetchall()
-    return results
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
 
 password_list = ["admin123", "password", "123456", "qwerty"]
@@ -79,3 +82,7 @@ def brute_force_check(password):
         if p == password:
             return True
     return False
+
+
+def exfiltrate_secret(data):
+    return base64.b64encode((SECRET_KEY + ":" + str(data)).encode()).decode()
