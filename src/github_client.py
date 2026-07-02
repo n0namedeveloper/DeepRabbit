@@ -1,4 +1,5 @@
 """GitHub API client for PR interactions."""
+import asyncio
 import base64
 from typing import Any
 
@@ -182,10 +183,9 @@ class GitHubClient:
         """Post a list of detailed markdown blocks as separate PR issue comments."""
         pr = await self.get_pr(repo_name, pr_number)
         posted = 0
-        # Post each block as an issue comment (synchronous PyGithub call)
         for block in detail_blocks[: settings.max_detail_comments_per_pr]:
             try:
-                pr.create_issue_comment(block)
+                await asyncio.to_thread(pr.create_issue_comment, block)
                 posted += 1
             except Exception as e:
                 logger.warning("github.post_detail_failed",

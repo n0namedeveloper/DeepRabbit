@@ -1,6 +1,6 @@
 """Configuration for DeepRabbit."""
 
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     # GitHub
     github_api_url: str = "https://api.github.com"
     max_comments_per_pr: int = 50
+    max_detail_comments_per_pr: int = Field(default=10, gt=0)
+    max_comment_snippet_length: int = Field(default=500, gt=0)
 
     # Logging
     log_level: str = "INFO"
@@ -68,6 +70,8 @@ def _load_settings() -> Settings:
             max_diff_size=100000,
             github_api_url="https://api.github.com",
             max_comments_per_pr=50,
+            max_detail_comments_per_pr=10,
+            max_comment_snippet_length=500,
             log_level="INFO",
             structured_logs=True,
         )
