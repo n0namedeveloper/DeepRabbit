@@ -23,6 +23,10 @@ inputs:
     description: 'Review level (light/normal/strict)'
     required: false
     default: 'normal'
+  llm_base_url:
+    description: 'LLM API base URL (e.g. https://inference.do-ai.run/v1)'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -62,5 +66,6 @@ runs:
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         REVIEW_LEVEL: ${{ inputs.review_level }}
+            LLM_BASE_URL: ${{ inputs.llm_base_url }}
       run: |
         python scripts/send_review.py
