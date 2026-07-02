@@ -23,6 +23,10 @@ inputs:
     description: 'Review level (light/normal/strict)'
     required: false
     default: 'normal'
+  llm_base_url:
+    description: 'LLM API base URL (e.g. https://inference.do-ai.run/v1)'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -59,6 +63,7 @@ runs:
         DEEPSEEK_KEY: ${{ inputs.deepseek_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         REVIEW_LEVEL: ${{ inputs.review_level }}
+            LLM_BASE_URL: ${{ inputs.llm_base_url }}
         PR_NUMBER: ${{ steps.collect.outputs.pr_number }}
         REPO: ${{ steps.collect.outputs.repo }}
         HEAD_SHA: ${{ steps.collect.outputs.head_sha }}
