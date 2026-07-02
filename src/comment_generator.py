@@ -98,6 +98,50 @@ class CommentGenerator:
 
         return "\n".join(lines)
 
+    def generate_summary_comment(self, issues: list[Issue], overall_comment: str | None) -> str:
+        """Generate an overall markdown summary for the review.
+
+        Includes counts by severity and security/refactor highlights.
+        """
+        critical = sum(1 for i in issues if getattr(
+            i.severity, 'value', str(i.severity)) == Severity.CRITICAL.value)
+        high = sum(1 for i in issues if getattr(
+            i.severity, 'value', str(i.severity)) == Severity.HIGH.value)
+        medium = sum(1 for i in issues if getattr(
+            i.severity, 'value', str(i.severity)) == Severity.MEDIUM.value)
+        low = sum(1 for i in issues if getattr(
+            i.severity, 'value', str(i.severity)) == Severity.LOW.value)
+        info = sum(1 for i in issues if getattr(
+            i.severity, 'value', str(i.severity)) == Severity.INFO.value)
+        security = sum(1 for i in issues if getattr(
+            i.type, 'value', str(i.type)) == IssueType.SECURITY.value)
+        refactor = sum(1 for i in issues if getattr(
+            i.type, 'value', str(i.type)) == IssueType.REFACTORING.value)
+
+        lines = [
+            "## 🐇 DeepRabbit AI Code Review",
+            "",
+            "### Summary",
+            overall_comment or "No overall comment provided.",
+            "",
+            "### Statistics",
+            f"- 🔴 Critical: {critical}",
+            f"- 🟠 High: {high}",
+            f"- 🟡 Medium: {medium}",
+            f"- 🟢 Low: {low}",
+            f"- ℹ️ Info: {info}",
+            f"- 🔒 Security: {security}",
+            f"- 🔧 Refactoring: {refactor}",
+            "",
+        ]
+
+        if issues:
+            lines.append("### Top issues")
+            for i in issues[:10]:
+                lines.append(f"- **{i.title}** — {i.severity.value.upper()}")
+
+        return "\n".join(lines)
+
     @staticmethod
     def _extract_suggestion_code(suggestion: str) -> str | None:
         """Extract code from suggestion text if it contains a code block."""

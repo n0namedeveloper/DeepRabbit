@@ -32,7 +32,8 @@ class DeepSeekClient:
             },
             timeout=httpx.Timeout(self.timeout, connect=30),
         )
-        logger.info("llm_client.initialized", model=self.model, base_url=self.base_url)
+        logger.info("llm_client.initialized",
+                    model=self.model, base_url=self.base_url)
 
     async def review_diff(
         self,
@@ -45,13 +46,15 @@ class DeepSeekClient:
         """Send diff to LLM and parse review results."""
         from src.prompt_templates import SYSTEM_PROMPT, build_review_prompt
 
-        prompt = build_review_prompt(diff, files, file_contents, review_level, repo_info)
+        prompt = build_review_prompt(
+            diff, files, file_contents, review_level, repo_info)
 
         start = time.monotonic()
         response_text = await self._chat_completion(SYSTEM_PROMPT, prompt)
         duration_ms = int((time.monotonic() - start) * 1000)
 
-        logger.info("llm.review.completed", duration_ms=duration_ms, response_length=len(response_text))
+        logger.info("llm.review.completed", duration_ms=duration_ms,
+                    response_length=len(response_text))
         summary, issues = self._parse_review_response(response_text)
         return summary, issues
 
@@ -102,10 +105,12 @@ class DeepSeekClient:
                 body = e.response.text[:500]
                 if e.response.status_code == 429 and attempt < max_retries - 1:
                     wait = 5 * (2 ** attempt)
-                    logger.warning("llm.rate_limited", attempt=attempt + 1, wait_s=wait)
+                    logger.warning("llm.rate_limited",
+                                   attempt=attempt + 1, wait_s=wait)
                     await asyncio.sleep(wait)
                     continue
-                logger.error("llm.http_error", status=e.response.status_code, body=body)
+                logger.error("llm.http_error",
+                             status=e.response.status_code, body=body)
                 raise
             except (KeyError, IndexError) as e:
                 logger.error("llm.response_parse_error", error=str(e))
@@ -114,14 +119,56 @@ class DeepSeekClient:
     def _parse_review_response(self, text: str) -> tuple[ReviewSummary, list[Issue]]:
         """Parse JSON review response from LLM."""
         raw = self._extract_json(text)
-        logger.info("llm.json_extracted", raw_preview=raw[:100], raw_len=len(raw))
+        logger.info("llm.json_extracted",
+                    raw_preview=raw[:100], raw_len=len(raw))
         data = self._try_parse_json(raw)
 
         if data is None:
+            # Attempt targeted extraction of issues array and summary when full JSON parse fails
             logger.warning("llm.invalid_json", preview=raw[:300])
-            return self._fallback_summary(text), []
+            issues_list = []
+            summary_data = {}
 
-        logger.info("llm.json_parsed", top_keys=list(data.keys()) if isinstance(data, dict) else "not-dict")
+            # helper to extract bracket-delimited content starting at idx
+            def extract_bracket(s: str, start_idx: int, open_ch: str = '[', close_ch: str = ']') -> str | None:
+                depth = 0
+                for i, ch in enumerate(s[start_idx:], start_idx):
+                    if ch == open_ch:
+                        depth += 1
+                    elif ch == close_ch:
+                        depth -= 1
+                        if depth == 0:
+                            return s[start_idx:i + 1]
+                return None
+
+            # try to find an "issues" array
+            m = re.search(r'"issues"\s*:\s*\[', raw)
+            if m:
+                arr_text = extract_bracket(raw, m.end() - 1, '[', ']')
+                if arr_text:
+                    try:
+                        issues_list = json.loads(arr_text)
+                    except Exception:
+                        issues_list = []
+
+            # try to find a summary object
+            m2 = re.search(r'"summary"\s*:\s*\{', raw)
+            if m2:
+                obj_text = extract_bracket(raw, m2.end() - 1, '{', '}')
+                if obj_text:
+                    try:
+                        summary_data = json.loads(obj_text)
+                    except Exception:
+                        summary_data = {}
+
+            if not issues_list and not summary_data:
+                return self._fallback_summary(text), []
+
+            # continue with extracted pieces
+            data = {"issues": issues_list, "summary": summary_data}
+
+        logger.info("llm.json_parsed", top_keys=list(data.keys())
+                    if isinstance(data, dict) else "not-dict")
 
         # Find issues list and summary dict from whatever structure LLM returned
         issues_list, summary_data = self._extract_issues_and_summary(data)
@@ -151,17 +198,25 @@ class DeepSeekClient:
                 )
                 issues.append(issue)
             except (ValueError, TypeError) as e:
-                logger.warning("llm.issue_parse_error", error=str(e), item=str(item)[:150])
+                logger.warning("llm.issue_parse_error",
+                               error=str(e), item=str(item)[:150])
                 continue
 
         summary.issues_found = len(issues)
-        summary.critical_count = sum(1 for i in issues if i.severity == Severity.CRITICAL)
-        summary.high_count = sum(1 for i in issues if i.severity == Severity.HIGH)
-        summary.medium_count = sum(1 for i in issues if i.severity == Severity.MEDIUM)
-        summary.low_count = sum(1 for i in issues if i.severity == Severity.LOW)
-        summary.info_count = sum(1 for i in issues if i.severity == Severity.INFO)
-        summary.security_count = sum(1 for i in issues if i.type == IssueType.SECURITY)
-        summary.refactoring_suggestions = sum(1 for i in issues if i.type == IssueType.REFACTORING)
+        summary.critical_count = sum(
+            1 for i in issues if i.severity == Severity.CRITICAL)
+        summary.high_count = sum(
+            1 for i in issues if i.severity == Severity.HIGH)
+        summary.medium_count = sum(
+            1 for i in issues if i.severity == Severity.MEDIUM)
+        summary.low_count = sum(
+            1 for i in issues if i.severity == Severity.LOW)
+        summary.info_count = sum(
+            1 for i in issues if i.severity == Severity.INFO)
+        summary.security_count = sum(
+            1 for i in issues if i.type == IssueType.SECURITY)
+        summary.refactoring_suggestions = sum(
+            1 for i in issues if i.type == IssueType.REFACTORING)
 
         logger.info(
             "llm.parse_complete",
@@ -198,7 +253,8 @@ class DeepSeekClient:
         # Case 3: search all values for a list of dicts that look like issues
         for v in data.values():
             if isinstance(v, list) and v and isinstance(v[0], dict) and "severity" in v[0]:
-                summary_data = {k: val for k, val in data.items() if not isinstance(val, list)}
+                summary_data = {
+                    k: val for k, val in data.items() if not isinstance(val, list)}
                 return v, summary_data
 
         return [], {k: v for k, v in data.items() if isinstance(v, str)}
