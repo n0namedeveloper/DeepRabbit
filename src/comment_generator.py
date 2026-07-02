@@ -103,29 +103,34 @@ class CommentGenerator:
 
         Includes counts by severity and security/refactor highlights.
         """
-        def sev_val(i: Issue) -> str:
-            v = getattr(i.severity, "value", None)
+        # Normalize enums/strings once and count in a single pass
+        from collections import Counter
+
+        def _normalize_sev(sv) -> str:
+            v = getattr(sv, "value", None)
             if v is None:
-                # maybe a plain string
-                v = str(i.severity)
+                v = str(sv)
             return str(v).lower()
 
-        def type_val(i: Issue) -> str:
-            v = getattr(i.type, "value", None)
+        def _normalize_type(tp) -> str:
+            v = getattr(tp, "value", None)
             if v is None:
-                v = str(i.type)
+                v = str(tp)
             return str(v).lower()
 
-        critical = sum(1 for i in issues if sev_val(i)
-                       == Severity.CRITICAL.value)
-        high = sum(1 for i in issues if sev_val(i) == Severity.HIGH.value)
-        medium = sum(1 for i in issues if sev_val(i) == Severity.MEDIUM.value)
-        low = sum(1 for i in issues if sev_val(i) == Severity.LOW.value)
-        info = sum(1 for i in issues if sev_val(i) == Severity.INFO.value)
-        security = sum(1 for i in issues if type_val(i)
-                       == IssueType.SECURITY.value)
-        refactor = sum(1 for i in issues if type_val(i)
-                       == IssueType.REFACTORING.value)
+        sev_counter: Counter = Counter()
+        type_counter: Counter = Counter()
+        for it in issues:
+            sev_counter[_normalize_sev(it.severity)] += 1
+            type_counter[_normalize_type(it.type)] += 1
+
+        critical = sev_counter.get(Severity.CRITICAL.value, 0)
+        high = sev_counter.get(Severity.HIGH.value, 0)
+        medium = sev_counter.get(Severity.MEDIUM.value, 0)
+        low = sev_counter.get(Severity.LOW.value, 0)
+        info = sev_counter.get(Severity.INFO.value, 0)
+        security = type_counter.get(IssueType.SECURITY.value, 0)
+        refactor = type_counter.get(IssueType.REFACTORING.value, 0)
 
         lines = [
             "## 🐇 DeepRabbit AI Code Review",
@@ -148,9 +153,7 @@ class CommentGenerator:
             lines.append("### Top issues")
             # Include short blocks for top issues with code snippets and suggestions
             for i in issues[:10]:
-                sev = sev_val(i).upper()
-                type_emoji = ISSUE_TYPE_EMOJI.get(
-                    i.type, "") if hasattr(i, "type") else ""
+                sev = _normalize_sev(i.severity).upper()
                 location = f"{i.file}:{i.line}" if i.file and i.line else (
                     i.file or "")
                 lines.append(f"- **{i.title}** — {sev} — {location}")

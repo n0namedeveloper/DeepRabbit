@@ -1,4 +1,18 @@
-# trigger review v2 v3 v4 v5 v6
+"""
+WARNING: examples/bad_code.py is intentionally malicious/insecure sample code.
+
+This file contains patterns that are dangerous if copied into production:
+- SQL injection via string concatenation and f-strings
+- Hardcoded credentials and tokens
+- Unsafe deserialization using `pickle.loads`
+- Command injection via `os.system`
+- Insecure use of cryptographic functions
+
+DO NOT reuse this code. It exists only as an educational example of insecure
+patterns for testing static analyzers and should never be imported or executed
+in production environments.
+"""
+
 import sqlite3
 import hashlib
 import pickle

@@ -149,7 +149,48 @@ class DeepSeekClient:
                     try:
                         issues_list = json.loads(arr_text)
                     except Exception:
+                        # Try to recover individual JSON objects inside the array
                         issues_list = []
+                        objs = []
+                        i = 0
+                        n = len(arr_text)
+                        while i < n:
+                            # find next object start
+                            if arr_text[i] != '{':
+                                i += 1
+                                continue
+                            depth = 0
+                            in_str = False
+                            esc = False
+                            start = i
+                            for j in range(i, n):
+                                ch = arr_text[j]
+                                if esc:
+                                    esc = False
+                                    continue
+                                if ch == '\\':
+                                    esc = True
+                                    continue
+                                if ch == '"':
+                                    in_str = not in_str
+                                    continue
+                                if in_str:
+                                    continue
+                                if ch == '{':
+                                    depth += 1
+                                elif ch == '}':
+                                    depth -= 1
+                                    if depth == 0:
+                                        candidate = arr_text[start:j+1]
+                                        try:
+                                            objs.append(json.loads(candidate))
+                                        except Exception:
+                                            pass
+                                        i = j + 1
+                                        break
+                            else:
+                                break
+                        issues_list = objs
 
             # try to find a summary object
             m2 = re.search(r'"summary"\s*:\s*\{', raw)
@@ -159,13 +200,20 @@ class DeepSeekClient:
                     try:
                         summary_data = json.loads(obj_text)
                     except Exception:
+                        # Try to extract a simple "summary": "..." string as fallback
                         summary_data = {}
+                        mstr = re.search(
+                            r'"summary"\s*:\s*"([^"]{10,2000})"', obj_text)
+                        if mstr:
+                            summary_data = {"summary": mstr.group(1)}
 
             if not issues_list and not summary_data:
                 return self._fallback_summary(text), []
 
-            # continue with extracted pieces
+            # Build partial data object even if only some parts were recovered
             data = {"issues": issues_list, "summary": summary_data}
+            logger.warning("llm.partial_json_recovered", issues_parsed=len(
+                issues_list), has_summary=bool(summary_data))
 
         logger.info("llm.json_parsed", top_keys=list(data.keys())
                     if isinstance(data, dict) else "not-dict")
