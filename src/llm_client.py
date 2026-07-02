@@ -113,45 +113,18 @@ class DeepSeekClient:
 
     def _parse_review_response(self, text: str) -> tuple[ReviewSummary, list[Issue]]:
         """Parse JSON review response from LLM."""
-        text = self._extract_json(text)
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            logger.warning("llm.invalid_json", text=text[:200])
+        raw = self._extract_json(text)
+        logger.info("llm.json_extracted", raw_preview=raw[:100], raw_len=len(raw))
+        data = self._try_parse_json(raw)
+
+        if data is None:
+            logger.warning("llm.invalid_json", preview=raw[:300])
             return self._fallback_summary(text), []
 
-        logger.info("llm.parsed_keys", keys=list(data.keys()) if isinstance(data, dict) else str(type(data)))
+        logger.info("llm.json_parsed", top_keys=list(data.keys()) if isinstance(data, dict) else "not-dict")
 
-        # Normalise: find issues list wherever it lives
-        issues_list = None
-        summary_data = {}
-
-        if isinstance(data, dict):
-            # Case 1: top-level {"issues": [...], "summary": {...}}
-            if "issues" in data:
-                issues_list = data["issues"]
-                summary_data = data.get("summary", {})
-                if not isinstance(summary_data, dict):
-                    summary_data = {}
-            # Case 2: {"summary": {"summary": "...", "issues": [...], "rating": "..."}}
-            elif "summary" in data and isinstance(data["summary"], dict):
-                inner = data["summary"]
-                issues_list = inner.get("issues", [])
-                summary_data = {k: v for k, v in inner.items() if k != "issues"}
-            # Case 3: flat dict that is the summary itself with issues inside
-            elif "issues" not in data:
-                # Search all dict values for a list that looks like issues
-                for v in data.values():
-                    if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict):
-                        issues_list = v
-                        break
-                summary_data = {k: v for k, v in data.items() if not isinstance(v, list)}
-
-        if issues_list is None:
-            issues_list = []
-
-        if not isinstance(summary_data, dict):
-            summary_data = {}
+        # Find issues list and summary dict from whatever structure LLM returned
+        issues_list, summary_data = self._extract_issues_and_summary(data)
 
         summary = ReviewSummary(
             summary=summary_data.get("summary", "Review completed."),
@@ -178,10 +151,9 @@ class DeepSeekClient:
                 )
                 issues.append(issue)
             except (ValueError, TypeError) as e:
-                logger.warning("llm.issue_parse_error", error=str(e), item=str(item))
+                logger.warning("llm.issue_parse_error", error=str(e), item=str(item)[:150])
                 continue
 
-        # Update summary counts
         summary.issues_found = len(issues)
         summary.critical_count = sum(1 for i in issues if i.severity == Severity.CRITICAL)
         summary.high_count = sum(1 for i in issues if i.severity == Severity.HIGH)
@@ -196,34 +168,133 @@ class DeepSeekClient:
             issues_found=len(issues),
             critical=summary.critical_count,
             high=summary.high_count,
+            summary_preview=summary.summary[:80],
         )
         return summary, issues
 
     @staticmethod
-    def _extract_json(text: str) -> str:
-        """Extract JSON from markdown code block or raw text."""
-        # Try code block first
-        if "```json" in text:
-            match = re.search(r"```json\n(.*?)```", text, re.DOTALL)
-            if match:
-                return match.group(1).strip()
-        if "```" in text:
-            match = re.search(r"```\n(.*?)```", text, re.DOTALL)
-            if match:
-                return match.group(1).strip()
-        # Try braces matching
+    def _extract_issues_and_summary(data: dict) -> tuple[list, dict]:
+        """Extract issues list and summary dict from any LLM response structure."""
+        if not isinstance(data, dict):
+            return [], {}
+
+        # Case 1: {"issues": [...], "summary": {...or str}}
+        if "issues" in data and isinstance(data["issues"], list):
+            summary_data = data.get("summary", {})
+            if isinstance(summary_data, str):
+                summary_data = {"summary": summary_data}
+            elif not isinstance(summary_data, dict):
+                summary_data = {}
+            return data["issues"], summary_data
+
+        # Case 2: {"summary": {"summary": "...", "issues": [...], "rating": "..."}}
+        if "summary" in data and isinstance(data["summary"], dict):
+            inner = data["summary"]
+            issues = inner.get("issues", [])
+            summary_data = {k: v for k, v in inner.items() if k != "issues"}
+            if isinstance(issues, list):
+                return issues, summary_data
+
+        # Case 3: search all values for a list of dicts that look like issues
+        for v in data.values():
+            if isinstance(v, list) and v and isinstance(v[0], dict) and "severity" in v[0]:
+                summary_data = {k: val for k, val in data.items() if not isinstance(val, list)}
+                return v, summary_data
+
+        return [], {k: v for k, v in data.items() if isinstance(v, str)}
+
+    @staticmethod
+    def _try_parse_json(text: str):
+        """Try to parse JSON with multiple fallback strategies."""
+        # Strategy 1: direct parse
         try:
-            start = text.index("{")
-            depth = 0
-            for i, ch in enumerate(text[start:], start):
-                if ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                if depth == 0:
-                    return text[start : i + 1]
-        except ValueError:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.debug("llm.json_strategy1_failed", error=str(e)[:80])
+
+        # Strategy 2: strip trailing comma before ] or }
+        try:
+            cleaned = re.sub(r',\s*([}\]])', r'\1', text)
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
             pass
+
+        # Strategy 3: close unclosed braces/arrays
+        try:
+            in_str = False
+            esc = False
+            depth_brace = 0
+            depth_bracket = 0
+            last_valid_pos = 0
+            for i, ch in enumerate(text):
+                if esc:
+                    esc = False
+                    continue
+                if ch == '\\' and in_str:
+                    esc = True
+                    continue
+                if ch == '"':
+                    in_str = not in_str
+                    continue
+                if in_str:
+                    continue
+                if ch == '{':
+                    depth_brace += 1
+                elif ch == '}':
+                    depth_brace -= 1
+                    if depth_brace == 0 and depth_bracket == 0:
+                        last_valid_pos = i + 1
+                elif ch == '[':
+                    depth_bracket += 1
+                elif ch == ']':
+                    depth_bracket -= 1
+            if last_valid_pos > 0:
+                candidate = text[:last_valid_pos]
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    pass
+            # Close open structures
+            suffix = ']' * max(0, depth_bracket) + '}' * max(0, depth_brace)
+            if suffix:
+                try:
+                    return json.loads(text + suffix)
+                except json.JSONDecodeError:
+                    pass
+        except Exception:
+            pass
+
+        return None
+
+    @staticmethod
+    def _extract_json(text: str) -> str:
+        """Extract JSON block from LLM response text."""
+        # Strip leading/trailing whitespace
+        text = text.strip()
+
+        # Code fence with json tag (closed)
+        m = re.search(r'```json\s*\n(.*?)\n```', text, re.DOTALL)
+        if m:
+            return m.group(1).strip()
+
+        # Code fence without tag (closed)
+        m = re.search(r'```\s*\n(.*?)\n```', text, re.DOTALL)
+        if m:
+            return m.group(1).strip()
+
+        # Code fence unclosed - strip the opening fence and take the rest
+        m = re.match(r'```(?:json)?\s*\n?(.*)', text, re.DOTALL)
+        if m:
+            content = m.group(1).strip()
+            # Remove trailing ``` if present
+            content = re.sub(r'\n?```\s*$', '', content).strip()
+            return content
+
+        # Brace-match from first {
+        idx = text.find('{')
+        if idx != -1:
+            return text[idx:].strip()
+
         return text
 
     @staticmethod
