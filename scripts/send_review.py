@@ -41,6 +41,17 @@ def get_file_content(filename):
 
 
 def main():
+    api_url = os.environ['API_URL']
+    health_url = api_url.rstrip('/') + '/healthz'
+
+    # Fail fast if the API endpoint is unreachable instead of waiting for the full review timeout.
+    try:
+        health_response = requests.get(health_url, timeout=(10, 15))
+        health_response.raise_for_status()
+    except Exception as exc:
+        print(f"❌ API health check failed for {health_url}: {exc}")
+        sys.exit(1)
+
     diff = get_diff()
     files = get_files()
     file_contents = {}
@@ -70,10 +81,10 @@ def main():
 
     try:
         response = requests.post(
-            os.environ['API_URL'],
+            api_url,
             json=payload,
             headers=headers,
-            timeout=300
+            timeout=(10, 900)
         )
         response.raise_for_status()
         result = response.json()
