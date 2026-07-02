@@ -98,6 +98,81 @@ class CommentGenerator:
 
         return "\n".join(lines)
 
+    def generate_summary_comment(self, issues: list[Issue], overall_comment: str | None) -> str:
+        """Generate an overall markdown summary for the review.
+
+        Includes counts by severity and security/refactor highlights.
+        """
+        # Normalize enums/strings once and count in a single pass
+        from collections import Counter
+
+        def _normalize_sev(sv) -> str:
+            v = getattr(sv, "value", None)
+            if v is None:
+                v = str(sv)
+            return str(v).lower()
+
+        def _normalize_type(tp) -> str:
+            v = getattr(tp, "value", None)
+            if v is None:
+                v = str(tp)
+            return str(v).lower()
+
+        sev_counter: Counter = Counter()
+        type_counter: Counter = Counter()
+        for it in issues:
+            sev_counter[_normalize_sev(it.severity)] += 1
+            type_counter[_normalize_type(it.type)] += 1
+
+        critical = sev_counter.get(Severity.CRITICAL.value, 0)
+        high = sev_counter.get(Severity.HIGH.value, 0)
+        medium = sev_counter.get(Severity.MEDIUM.value, 0)
+        low = sev_counter.get(Severity.LOW.value, 0)
+        info = sev_counter.get(Severity.INFO.value, 0)
+        security = type_counter.get(IssueType.SECURITY.value, 0)
+        refactor = type_counter.get(IssueType.REFACTORING.value, 0)
+
+        lines = [
+            "## 🐇 DeepRabbit AI Code Review",
+            "",
+            "### Summary",
+            overall_comment or "No overall comment provided.",
+            "",
+            "### Statistics",
+            f"- 🔴 Critical: {critical}",
+            f"- 🟠 High: {high}",
+            f"- 🟡 Medium: {medium}",
+            f"- 🟢 Low: {low}",
+            f"- ℹ️ Info: {info}",
+            f"- 🔒 Security: {security}",
+            f"- 🔧 Refactoring: {refactor}",
+            "",
+        ]
+
+        if issues:
+            lines.append("### Top issues")
+            # Include short blocks for top issues with code snippets and suggestions
+            for i in issues[:10]:
+                sev = _normalize_sev(i.severity).upper()
+                location = f"{i.file}:{i.line}" if i.file and i.line else (
+                    i.file or "")
+                lines.append(f"- **{i.title}** — {sev} — {location}")
+                if i.description:
+                    lines.append(f"\n    {i.description}")
+                if i.code_snippet:
+                    lines.append("\n**Relevant code:**")
+                    lines.append(f"```\n{i.code_snippet[:400]}\n```")
+                if i.suggestion:
+                    suggestion_code = self._extract_suggestion_code(
+                        i.suggestion)
+                    if suggestion_code:
+                        lines.append("\n**Suggested fix:**")
+                        lines.append(f"```suggestion\n{suggestion_code}\n```")
+                    else:
+                        lines.append(f"\n**Suggestion:** {i.suggestion}")
+
+        return "\n".join(lines)
+
     @staticmethod
     def _extract_suggestion_code(suggestion: str) -> str | None:
         """Extract code from suggestion text if it contains a code block."""

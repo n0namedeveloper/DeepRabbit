@@ -308,7 +308,18 @@ class CodeAnalyzer:
                 # Skip private functions
                 if node.name.startswith("_"):
                     continue
-                if not (node.body and isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant | ast.Str)):
+
+                has_docstring = False
+                if node.body and isinstance(node.body[0], ast.Expr):
+                    value = node.body[0].value
+                    # Different Python versions represent string docstrings differently in the AST.
+                    # Prefer ast.Constant with a str value; fall back to ast.Str if present.
+                    if hasattr(ast, "Constant") and isinstance(value, ast.Constant):
+                        has_docstring = isinstance(value.value, str)
+                    elif hasattr(ast, "Str") and isinstance(value, ast.Str):
+                        has_docstring = True
+
+                if not has_docstring:
                     self.issues.append(
                         Issue(
                             type=IssueType.DOCUMENTATION,

@@ -63,7 +63,7 @@ runs:
         DEEPSEEK_KEY: ${{ inputs.deepseek_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         REVIEW_LEVEL: ${{ inputs.review_level }}
-            LLM_BASE_URL: ${{ inputs.llm_base_url }}
+        LLM_BASE_URL: ${{ inputs.llm_base_url }}
         PR_NUMBER: ${{ steps.collect.outputs.pr_number }}
         REPO: ${{ steps.collect.outputs.repo }}
         HEAD_SHA: ${{ steps.collect.outputs.head_sha }}

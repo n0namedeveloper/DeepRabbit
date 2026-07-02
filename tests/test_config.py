@@ -15,6 +15,12 @@ class TestSettings:
         monkeypatch.setenv("DEEPSEEK_API_KEY", "test-deepseek-key")
         monkeypatch.setenv("GITHUB_TOKEN", "test-github-token")
         monkeypatch.setenv("DEEPRABBIT_API_KEY", "test-deeprabbit-key")
+        # Ensure optional LLM/env vars do not leak from local .env into this test
+        monkeypatch.delenv("LLM_MODEL", raising=False)
+        monkeypatch.delenv("LLM_BASE_URL", raising=False)
+        monkeypatch.delenv("LLM_TIMEOUT", raising=False)
+        monkeypatch.delenv("MAX_TOKENS", raising=False)
+        monkeypatch.delenv("TEMPERATURE", raising=False)
         monkeypatch.delenv("PORT", raising=False)
         monkeypatch.delenv("LOG_LEVEL", raising=False)
 
@@ -22,8 +28,22 @@ class TestSettings:
         # We need to reload the module due to pydantic-settings cache
         import importlib
         from src import config
-        importlib.reload(config)
-        settings = config.settings
+        # Prevent local .env from affecting this test by temporarily moving it if present
+        import pathlib
+        import os
+        env_path = pathlib.Path(".env")
+        moved = False
+        if env_path.exists():
+            env_backup = env_path.with_suffix('.env.testbak')
+            os.replace(env_path, env_backup)
+            moved = True
+        try:
+            importlib.reload(config)
+            settings = config.settings
+        finally:
+            # restore .env if we moved it
+            if moved:
+                os.replace(env_backup, env_path)
 
         assert settings.port == 8000
         assert settings.host == "0.0.0.0"
