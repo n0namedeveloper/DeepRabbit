@@ -30,6 +30,8 @@ ISSUE_TYPE_EMOJI = {
 class CommentGenerator:
     """Convert issues into GitHub review comments."""
 
+    MAX_SNIPPET_LENGTH = 500
+
     def __init__(self):
         logger.info("comment_generator.initialized")
 
@@ -83,7 +85,8 @@ class CommentGenerator:
 
         if issue.code_snippet:
             lines.append("**Relevant code:**")
-            lines.append(f"```\n{issue.code_snippet[:300]}\n```")
+            lines.append(
+                f"```\n{self._trim_snippet(issue.code_snippet, 300)}\n```")
             lines.append("")
 
         if issue.suggestion:
@@ -180,45 +183,127 @@ class CommentGenerator:
                 short_line = short.splitlines()[0]
                 lines.append(f"- {i.title}: {short_line}")
 
-            # Add detailed fix suggestion blocks for each issue
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-            lines.append("### Fix Suggestions")
-            lines.append("")
+        return "\n".join(lines)
 
-            for idx, i in enumerate(issues, 1):
-                sev_emoji = SEVERITY_EMOJI.get(i.severity, "⚪")
+    def generate_summary_body(self, issues: list[Issue], overall_comment: str | None) -> str:
+        """Generate a compact summary body without detailed fix blocks."""
+        from collections import Counter
+
+        def _normalize_sev(sv) -> str:
+            v = getattr(sv, "value", None)
+            if v is None:
+                v = str(sv)
+            return str(v).lower()
+
+        def _normalize_type(tp) -> str:
+            v = getattr(tp, "value", None)
+            if v is None:
+                v = str(tp)
+            return str(v).lower()
+
+        sev_counter: Counter = Counter()
+        type_counter: Counter = Counter()
+        for it in issues:
+            sev_counter[_normalize_sev(it.severity)] += 1
+            type_counter[_normalize_type(it.type)] += 1
+
+        critical = sev_counter.get(Severity.CRITICAL.value, 0)
+        high = sev_counter.get(Severity.HIGH.value, 0)
+        medium = sev_counter.get(Severity.MEDIUM.value, 0)
+        low = sev_counter.get(Severity.LOW.value, 0)
+        info = sev_counter.get(Severity.INFO.value, 0)
+        security = type_counter.get(IssueType.SECURITY.value, 0)
+        refactor = type_counter.get(IssueType.REFACTORING.value, 0)
+
+        lines = [
+            "## 🐇 DeepRabbit AI Code Review",
+            "",
+            "### Summary",
+            overall_comment or "No overall comment provided.",
+            "",
+            "### Statistics",
+            f"- 🔴 Critical: {critical}",
+            f"- 🟠 High: {high}",
+            f"- 🟡 Medium: {medium}",
+            f"- 🟢 Low: {low}",
+            f"- ℹ️ Info: {info}",
+            f"- 🔒 Security: {security}",
+            f"- 🔧 Refactoring: {refactor}",
+            "",
+        ]
+
+        if issues:
+            lines.append("### Top issues")
+            for i in issues[:10]:
+                sev = _normalize_sev(i.severity).upper()
                 location = f"{i.file}:{i.line}" if i.file and i.line else (
-                    i.file or "unknown")
-
-                lines.append(f"#### {idx}. {sev_emoji} {i.title}")
-                lines.append(
-                    f"**Location:** {location} | **Severity:** {_normalize_sev(i.severity).upper()}")
-                lines.append("")
-
+                    i.file or "")
+                lines.append(f"- **{i.title}** — {sev} — {location}")
                 if i.description:
-                    lines.append(i.description)
-                    lines.append("")
-
+                    lines.append(f"    {i.description}")
                 if i.code_snippet:
-                    lines.append("**Problematic code:**")
-                    # Preserve full snippet in suggestion blocks
-                    lines.append(f"```python\n{i.code_snippet}\n```")
-                    lines.append("")
-
+                    lines.append("    **Relevant code:**")
+                    lines.append(f"    ```")
+                    lines.append(self._trim_snippet(
+                        i.code_snippet, 240, indent="    "))
+                    lines.append("    ```")
                 if i.suggestion:
                     suggestion_code = self._extract_suggestion_code(
                         i.suggestion)
                     if suggestion_code:
-                        lines.append("**Suggested fix (applyable):**")
-                        lines.append(f"```suggestion\n{suggestion_code}\n```")
+                        lines.append("    **Suggested fix:**")
+                        lines.append("    ```suggestion")
+                        lines.append(self._trim_snippet(
+                            suggestion_code, 240, indent="    "))
+                        lines.append("    ```")
                     else:
-                        lines.append("**Suggested fix:**")
-                        lines.append(i.suggestion)
-                    lines.append("")
+                        lines.append(f"    **Suggestion:** {i.suggestion}")
 
         return "\n".join(lines)
+
+    def generate_detail_blocks(self, issues: list[Issue]) -> list[str]:
+        """Generate separate markdown blocks for each issue's fix suggestion.
+
+        Each block is intended to be posted as an individual PR comment.
+        """
+        blocks: list[str] = []
+        if not issues:
+            return blocks
+
+        for idx, i in enumerate(issues, 1):
+            parts: list[str] = []
+            sev_emoji = SEVERITY_EMOJI.get(i.severity, "⚪")
+            location = f"{i.file}:{i.line}" if i.file and i.line else (
+                i.file or "unknown")
+            parts.append(f"#### {idx}. {sev_emoji} {i.title}")
+            parts.append(
+                f"**Location:** {location} | **Severity:** {self._severity_label(i)}")
+            parts.append("")
+
+            if i.description:
+                parts.append(i.description)
+                parts.append("")
+
+            if i.code_snippet:
+                parts.append("**Problematic code:**")
+                parts.append(
+                    f"```python\n{self._trim_snippet(i.code_snippet, self.MAX_SNIPPET_LENGTH)}\n```")
+                parts.append("")
+
+            if i.suggestion:
+                suggestion_code = self._extract_suggestion_code(i.suggestion)
+                if suggestion_code:
+                    parts.append("**Suggested fix:**")
+                    parts.append(
+                        f"```suggestion\n{self._trim_snippet(suggestion_code, self.MAX_SNIPPET_LENGTH)}\n```")
+                else:
+                    parts.append("**Suggested fix:**")
+                    parts.append(i.suggestion)
+                parts.append("")
+
+            blocks.append("\n".join(parts))
+
+        return blocks
 
     @staticmethod
     def _extract_suggestion_code(suggestion: str) -> str | None:
@@ -252,50 +337,16 @@ class CommentGenerator:
             return stripped
         return None
 
-    def generate_detail_blocks(self, issues: list[Issue]) -> list[str]:
-        """Generate separate markdown blocks for each issue's fix suggestion.
+    @staticmethod
+    def _severity_label(issue: Issue) -> str:
+        return getattr(issue.severity, "value", str(issue.severity)).upper()
 
-        Each block is intended to be posted as an individual PR comment.
-        """
-        blocks: list[str] = []
-        if not issues:
-            return blocks
-
-        def _normalize_sev(sv) -> str:
-            v = getattr(sv, "value", None)
-            if v is None:
-                v = str(sv)
-            return str(v).lower()
-
-        for idx, i in enumerate(issues, 1):
-            parts: list[str] = []
-            sev_emoji = SEVERITY_EMOJI.get(i.severity, "⚪")
-            location = f"{i.file}:{i.line}" if i.file and i.line else (
-                i.file or "unknown")
-            parts.append(f"#### {idx}. {sev_emoji} {i.title}")
-            parts.append(
-                f"**Location:** {location} | **Severity:** {_normalize_sev(i.severity).upper()}")
-            parts.append("")
-
-            if i.description:
-                parts.append(i.description)
-                parts.append("")
-
-            if i.code_snippet:
-                parts.append("**Problematic code:**")
-                parts.append(f"```python\n{i.code_snippet}\n```")
-                parts.append("")
-
-            if i.suggestion:
-                suggestion_code = self._extract_suggestion_code(i.suggestion)
-                if suggestion_code:
-                    parts.append("**Suggested fix (applyable):**")
-                    parts.append(f"```suggestion\n{suggestion_code}\n```")
-                else:
-                    parts.append("**Suggested fix:**")
-                    parts.append(i.suggestion)
-                parts.append("")
-
-            blocks.append("\n".join(parts))
-
-        return blocks
+    @staticmethod
+    def _trim_snippet(snippet: str, limit: int, indent: str = "") -> str:
+        """Trim a snippet to a safe length while preserving readability."""
+        text = snippet[:limit]
+        if len(snippet) > limit:
+            text += "\n... (truncated)"
+        if indent:
+            return "\n".join(f"{indent}{line}" for line in text.splitlines())
+        return text

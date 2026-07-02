@@ -122,20 +122,12 @@ async def review_pr(
         )
         logger.info("comments.generated", count=len(comments))
 
-        # Build a rich overall summary comment (compact) and post detailed
-        # fix-suggestion blocks as separate PR comments to avoid one huge body.
+        # Build a compact summary body and post detailed fix-suggestion blocks
+        # as separate PR comments.
         try:
-            summary_markdown = comment_gen.generate_summary_comment(
+            summary_markdown = comment_gen.generate_summary_body(
                 all_issues, llm_summary.overall_comment)
-            # Keep only the top portion (before detailed Fix Suggestions)
-            split_token = "\n### Fix Suggestions"
-            if split_token in summary_markdown:
-                top, _details = summary_markdown.split(split_token, 1)
-                llm_summary.overall_comment = top.strip()
-            else:
-                llm_summary.overall_comment = summary_markdown
-
-            # Prepare per-issue detail blocks and post them as separate comments
+            llm_summary.overall_comment = summary_markdown
             detail_blocks = comment_gen.generate_detail_blocks(all_issues)
         except Exception:
             logger.warning("comment_generator.summary_failed")
