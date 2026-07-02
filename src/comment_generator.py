@@ -251,3 +251,51 @@ class CommentGenerator:
         if any(stripped.startswith(s) for s in code_starters):
             return stripped
         return None
+
+    def generate_detail_blocks(self, issues: list[Issue]) -> list[str]:
+        """Generate separate markdown blocks for each issue's fix suggestion.
+
+        Each block is intended to be posted as an individual PR comment.
+        """
+        blocks: list[str] = []
+        if not issues:
+            return blocks
+
+        def _normalize_sev(sv) -> str:
+            v = getattr(sv, "value", None)
+            if v is None:
+                v = str(sv)
+            return str(v).lower()
+
+        for idx, i in enumerate(issues, 1):
+            parts: list[str] = []
+            sev_emoji = SEVERITY_EMOJI.get(i.severity, "⚪")
+            location = f"{i.file}:{i.line}" if i.file and i.line else (
+                i.file or "unknown")
+            parts.append(f"#### {idx}. {sev_emoji} {i.title}")
+            parts.append(
+                f"**Location:** {location} | **Severity:** {_normalize_sev(i.severity).upper()}")
+            parts.append("")
+
+            if i.description:
+                parts.append(i.description)
+                parts.append("")
+
+            if i.code_snippet:
+                parts.append("**Problematic code:**")
+                parts.append(f"```python\n{i.code_snippet}\n```")
+                parts.append("")
+
+            if i.suggestion:
+                suggestion_code = self._extract_suggestion_code(i.suggestion)
+                if suggestion_code:
+                    parts.append("**Suggested fix (applyable):**")
+                    parts.append(f"```suggestion\n{suggestion_code}\n```")
+                else:
+                    parts.append("**Suggested fix:**")
+                    parts.append(i.suggestion)
+                parts.append("")
+
+            blocks.append("\n".join(parts))
+
+        return blocks

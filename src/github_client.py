@@ -104,7 +104,8 @@ class GitHubClient:
             return {"id": data.get("id"), "state": data.get("state")}
 
         except httpx.HTTPStatusError as e:
-            logger.error("github.review_error", status=e.response.status_code, body=e.response.text[:500])
+            logger.error("github.review_error",
+                         status=e.response.status_code, body=e.response.text[:500])
             # Fallback: post as regular comment
             fallback = pr.create_issue_comment(body)
             return {"fallback_comment_id": fallback.id}
@@ -171,6 +172,25 @@ class GitHubClient:
         if labels:
             pr.add_to_labels(*labels)
         return labels
+
+    async def post_detail_comments(
+        self,
+        repo_name: str,
+        pr_number: int,
+        detail_blocks: list[str],
+    ) -> int:
+        """Post a list of detailed markdown blocks as separate PR issue comments."""
+        pr = await self.get_pr(repo_name, pr_number)
+        posted = 0
+        # Post each block as an issue comment (synchronous PyGithub call)
+        for block in detail_blocks[: settings.max_detail_comments_per_pr]:
+            try:
+                pr.create_issue_comment(block)
+                posted += 1
+            except Exception as e:
+                logger.warning("github.post_detail_failed",
+                               pr=pr_number, error=str(e))
+        return posted
 
     def _build_review_body(self, summary: ReviewSummary) -> str:
         """Build markdown review body."""
