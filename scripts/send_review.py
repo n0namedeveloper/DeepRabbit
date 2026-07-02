@@ -59,7 +59,7 @@ def main():
         'file_contents': file_contents,
         'deepseek_api_key': os.environ['DEEPSEEK_KEY'],
         'github_token': os.environ['GITHUB_TOKEN'],
-        'review_level': os.environ['REVIEW_LEVEL']
+        'review_level': os.environ['REVIEW_LEVEL'],
         'llm_base_url': os.environ.get('LLM_BASE_URL', ''),
     }
 
