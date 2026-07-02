@@ -78,7 +78,7 @@ Perform a comprehensive code review of this Pull Request. Return your findings i
       "line": 42,
       "end_line": 45,
       "suggestion": "How to fix (with code example if applicable)",
-      "code_snippet": "the problematic lines",
+            "code_snippet": "REQUIRED: copy the exact problematic line(s) of code from the diff verbatim, max 3 lines",
       "category": "injection|race_condition|duplicate|naming|missing_docs|etc"
     }}
   ],
