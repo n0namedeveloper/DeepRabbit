@@ -1,5 +1,4 @@
 """Generate GitHub review comments from detected issues."""
-
 import structlog
 
 from src.config import settings
@@ -21,9 +20,9 @@ ISSUE_TYPE_EMOJI = {
     IssueType.PERFORMANCE: "⚡",
     IssueType.BUG: "🐛",
     IssueType.CODE_SMELL: "👃",
-    IssueType.CONVENTION: "📏",
+    IssueType.CONVENTION: "✒️",
     IssueType.REFACTORING: "🔧",
-    IssueType.DOCUMENTATION: "📝",
+    IssueType.DOCUMENTATION: "📓",
     IssueType.COMPLEXITY: "🧩",
 }
 
@@ -58,13 +57,11 @@ class CommentGenerator:
                 line=issue.line,
                 body=body,
                 side="RIGHT",
+                original_line=issue.line,
             )
             comments.append(comment)
 
-            if len(comments) >= settings.max_comments_per_pr:
-                logger.info("comment_limit_reached", limit=settings.max_comments_per_pr)
-                break
-
+        logger.info("comments.generated", count=len(comments))
         return comments
 
     def _format_comment(self, issue: Issue) -> str:
@@ -84,50 +81,51 @@ class CommentGenerator:
             lines.append(issue.description)
             lines.append("")
 
-        if issue.suggestion:
-            lines.append(f"**Suggestion:** {issue.suggestion}")
-            lines.append("")
-
         if issue.code_snippet:
             lines.append("**Relevant code:**")
-            lines.append(f"```\n{issue.code_snippet[:250]}\n```")
-
-        return "\n".join(lines)
-
-    def generate_summary_comment(
-        self,
-        issues: list[Issue],
-        summary: str,
-    ) -> str:
-        """Generate a overall PR summary comment."""
-        by_severity = {
-            Severity.CRITICAL: [],
-            Severity.HIGH: [],
-            Severity.MEDIUM: [],
-            Severity.LOW: [],
-            Severity.INFO: [],
-        }
-        for i in issues:
-            by_severity.get(i.severity, by_severity[Severity.INFO]).append(i)
-
-        lines = [
-            "## 🐇 DeepRabbit AI Code Review",
-            "",
-            f"**Summary:** {summary}",
-            "",
-        ]
-
-        for sev in [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO]:
-            items = by_severity[sev]
-            if not items:
-                continue
-            icon = SEVERITY_EMOJI.get(sev, "")
-            lines.append(f"### {icon} {sev.value.upper()} ({len(items)})")
-            for issue in items[:5]:
-                file_info = f"`{issue.file}:{issue.line}`" if issue.file else ""
-                lines.append(f"- **{issue.title}** {file_info}")
-            if len(items) > 5:
-                lines.append(f"- ... and {len(items) - 5} more")
+            lines.append(f"```\n{issue.code_snippet[:300]}\n```")
             lines.append("")
 
+        if issue.suggestion:
+            # Extract just the code part from suggestion if it contains one
+            suggestion_code = self._extract_suggestion_code(issue.suggestion)
+            if suggestion_code:
+                # Render as GitHub suggestion block (shows Apply button in PR)
+                lines.append("**Suggested fix:**")
+                lines.append(f"```suggestion\n{suggestion_code}\n```")
+            else:
+                lines.append(f"**Suggestion:** {issue.suggestion}")
+
         return "\n".join(lines)
+
+    @staticmethod
+    def _extract_suggestion_code(suggestion: str) -> str | None:
+        """Extract code from suggestion text if it contains a code block."""
+        import re
+        # Look for explicit code block
+        match = re.search(r"```(?:\w+)?\n(.*?)```", suggestion, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        # Look for inline code with backticks spanning multiple lines
+        match = re.search(r"`([^`]{10,})`", suggestion)
+        if match:
+            return match.group(1).strip()
+        # If suggestion itself looks like code (starts with keyword or indent)
+        stripped = suggestion.strip()
+        code_starters = (
+            "cursor.execute(",
+            "conn.execute(",
+            "stmt ",
+            "query ",
+            "SELECT ",
+            "INSERT ",
+            "UPDATE ",
+            "DELETE ",
+            "import ",
+            "from ",
+            "def ",
+            "class ",
+        )
+        if any(stripped.startswith(s) for s in code_starters):
+            return stripped
+        return None
