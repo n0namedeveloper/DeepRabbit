@@ -2,6 +2,8 @@ import os
 import sys
 import json
 import subprocess
+import time
+
 import requests
 
 
@@ -40,14 +42,39 @@ def get_file_content(filename):
         return None
 
 
+def wait_for_api(health_url, timeout_seconds=300, interval_seconds=5):
+    """Wait for the API health endpoint to become reachable.
+
+    Ngrok and similar tunnels can briefly return 502/504 while the local
+    service or tunnel is still warming up, so we retry before giving up.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    last_error = None
+
+    while time.monotonic() < deadline:
+        try:
+            response = requests.get(health_url, timeout=(10, 15))
+            if response.ok:
+                return response
+            last_error = f"{response.status_code} {response.reason}"
+        except requests.RequestException as exc:
+            last_error = str(exc)
+
+        print(f"⏳ Waiting for API at {health_url}: {last_error}")
+        time.sleep(interval_seconds)
+
+    raise RuntimeError(
+        f"API health check did not become ready within {timeout_seconds}s: {last_error}"
+    )
+
+
 def main():
     api_url = os.environ['API_URL']
     health_url = api_url.rstrip('/') + '/healthz'
 
-    # Fail fast if the API endpoint is unreachable instead of waiting for the full review timeout.
+    # Retry while the tunnel/server is warming up instead of failing immediately on transient 502s.
     try:
-        health_response = requests.get(health_url, timeout=(10, 15))
-        health_response.raise_for_status()
+        wait_for_api(health_url)
     except Exception as exc:
         print(f"❌ API health check failed for {health_url}: {exc}")
         sys.exit(1)
