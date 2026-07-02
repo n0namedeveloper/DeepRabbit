@@ -24,9 +24,9 @@ class Settings(BaseSettings):
     workers: int = 1
 
     # LLM
-        llm_model: str = "deepseek-3.2"
+            llm_model: str = "deepseek-ai/deepseek-chat"
     llm_base_url: str = "https://inference.do-ai.run/v1"
-    llm_timeout: int = 120
+    llm_timeout: int = 300
     max_tokens: int = 4096
     temperature: float = 0.1
 
