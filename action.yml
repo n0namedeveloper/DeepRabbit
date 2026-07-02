@@ -9,7 +9,7 @@ inputs:
   api_url:
     description: 'DeepRabbit FastAPI server URL'
     required: false
-          default: ''
+    default: ''
   api_key:
     description: 'API key used to authenticate with the server'
     required: true
@@ -31,6 +31,7 @@ runs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
@@ -57,10 +58,10 @@ runs:
         API_KEY: ${{ inputs.api_key }}
         DEEPSEEK_KEY: ${{ inputs.deepseek_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
-        PR_NUMBER: ${{ github.event.number }}
-        REPO: ${{ github.repository }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        BASE_SHA: ${{ github.event.pull_request.base.sha }}
         REVIEW_LEVEL: ${{ inputs.review_level }}
+        PR_NUMBER: ${{ steps.collect.outputs.pr_number }}
+        REPO: ${{ steps.collect.outputs.repo }}
+        HEAD_SHA: ${{ steps.collect.outputs.head_sha }}
+        BASE_SHA: ${{ steps.collect.outputs.base_sha }}
       run: |
         python scripts/send_review.py
