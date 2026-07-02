@@ -114,10 +114,11 @@ class DeepSeekClient:
     def _parse_review_response(self, text: str) -> tuple[ReviewSummary, list[Issue]]:
         """Parse JSON review response from LLM."""
         raw = self._extract_json(text)
+        logger.info("llm.json_extracted", raw_preview=raw[:100], raw_len=len(raw))
         data = self._try_parse_json(raw)
 
         if data is None:
-            logger.warning("llm.invalid_json", preview=raw[:200])
+            logger.warning("llm.invalid_json", preview=raw[:300])
             return self._fallback_summary(text), []
 
         logger.info("llm.json_parsed", top_keys=list(data.keys()) if isinstance(data, dict) else "not-dict")
@@ -177,10 +178,12 @@ class DeepSeekClient:
         if not isinstance(data, dict):
             return [], {}
 
-        # Case 1: {"issues": [...], "summary": {...}}
+        # Case 1: {"issues": [...], "summary": {...or str}}
         if "issues" in data and isinstance(data["issues"], list):
             summary_data = data.get("summary", {})
-            if not isinstance(summary_data, dict):
+            if isinstance(summary_data, str):
+                summary_data = {"summary": summary_data}
+            elif not isinstance(summary_data, dict):
                 summary_data = {}
             return data["issues"], summary_data
 
@@ -218,13 +221,11 @@ class DeepSeekClient:
 
         # Strategy 3: close unclosed braces/arrays
         try:
-            # Count open vs closed
             in_str = False
             esc = False
             depth_brace = 0
             depth_bracket = 0
             last_valid_pos = 0
-
             for i, ch in enumerate(text):
                 if esc:
                     esc = False
@@ -247,14 +248,12 @@ class DeepSeekClient:
                     depth_bracket += 1
                 elif ch == ']':
                     depth_bracket -= 1
-
             if last_valid_pos > 0:
                 candidate = text[:last_valid_pos]
                 try:
                     return json.loads(candidate)
                 except json.JSONDecodeError:
                     pass
-
             # Close open structures
             suffix = ']' * max(0, depth_bracket) + '}' * max(0, depth_brace)
             if suffix:
@@ -270,6 +269,9 @@ class DeepSeekClient:
     @staticmethod
     def _extract_json(text: str) -> str:
         """Extract JSON block from LLM response text."""
+        # Strip leading/trailing whitespace
+        text = text.strip()
+
         # Code fence with json tag (closed)
         m = re.search(r'```json\s*\n(.*?)\n```', text, re.DOTALL)
         if m:
@@ -280,10 +282,13 @@ class DeepSeekClient:
         if m:
             return m.group(1).strip()
 
-        # Code fence unclosed - take everything after
-        m = re.search(r'```(?:json)?\s*\n(.*)', text, re.DOTALL)
+        # Code fence unclosed - strip the opening fence and take the rest
+        m = re.match(r'```(?:json)?\s*\n?(.*)', text, re.DOTALL)
         if m:
-            return m.group(1).strip()
+            content = m.group(1).strip()
+            # Remove trailing ``` if present
+            content = re.sub(r'\n?```\s*$', '', content).strip()
+            return content
 
         # Brace-match from first {
         idx = text.find('{')
