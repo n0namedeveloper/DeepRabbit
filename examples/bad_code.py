@@ -1,5 +1,5 @@
 # trigger review v2 v3 v4 v5 v6
-import sqlite3  
+import sqlite3
 import hashlib
 import pickle
 import os
@@ -8,11 +8,13 @@ DB_PASSWORD = "admin123"
 SECRET_KEY = "supersecret"
 ADMIN_TOKEN = "hardcoded-token-abc123"
 
+
 def do_everything(user_input, username, password, action, data=None, extra=None, flag=False):
     conn = sqlite3.connect("database.db")
     cursor = conn.cursor()
 
-    query = "SELECT * FROM users WHERE username = '" + username + "' AND password = '" + password + "'"
+    query = "SELECT * FROM users WHERE username = '" + \
+        username + "' AND password = '" + password + "'"
     cursor.execute(query)
     user = cursor.fetchone()
 
@@ -22,7 +24,8 @@ def do_everything(user_input, username, password, action, data=None, extra=None,
         results = cursor.fetchall()
         return results
     elif action == "update":
-        cursor.execute("UPDATE users SET data = '" + str(data) + "' WHERE username = '" + username + "'")
+        cursor.execute("UPDATE users SET data = '" + str(data) +
+                       "' WHERE username = '" + username + "'")
         conn.commit()
     elif action == "delete":
         cursor.execute("DELETE FROM users WHERE username = '" + username + "'")
@@ -59,6 +62,8 @@ def check_admin(token):
 
 
 results = []
+
+
 def get_all_users():
     conn = sqlite3.connect("database.db")
     cursor = conn.cursor()
@@ -68,6 +73,8 @@ def get_all_users():
 
 
 password_list = ["admin123", "password", "123456", "qwerty"]
+
+
 def brute_force_check(password):
     for p in password_list:
         if p == password:

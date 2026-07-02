@@ -103,20 +103,29 @@ class CommentGenerator:
 
         Includes counts by severity and security/refactor highlights.
         """
-        critical = sum(1 for i in issues if getattr(
-            i.severity, 'value', str(i.severity)) == Severity.CRITICAL.value)
-        high = sum(1 for i in issues if getattr(
-            i.severity, 'value', str(i.severity)) == Severity.HIGH.value)
-        medium = sum(1 for i in issues if getattr(
-            i.severity, 'value', str(i.severity)) == Severity.MEDIUM.value)
-        low = sum(1 for i in issues if getattr(
-            i.severity, 'value', str(i.severity)) == Severity.LOW.value)
-        info = sum(1 for i in issues if getattr(
-            i.severity, 'value', str(i.severity)) == Severity.INFO.value)
-        security = sum(1 for i in issues if getattr(
-            i.type, 'value', str(i.type)) == IssueType.SECURITY.value)
-        refactor = sum(1 for i in issues if getattr(
-            i.type, 'value', str(i.type)) == IssueType.REFACTORING.value)
+        def sev_val(i: Issue) -> str:
+            v = getattr(i.severity, "value", None)
+            if v is None:
+                # maybe a plain string
+                v = str(i.severity)
+            return str(v).lower()
+
+        def type_val(i: Issue) -> str:
+            v = getattr(i.type, "value", None)
+            if v is None:
+                v = str(i.type)
+            return str(v).lower()
+
+        critical = sum(1 for i in issues if sev_val(i)
+                       == Severity.CRITICAL.value)
+        high = sum(1 for i in issues if sev_val(i) == Severity.HIGH.value)
+        medium = sum(1 for i in issues if sev_val(i) == Severity.MEDIUM.value)
+        low = sum(1 for i in issues if sev_val(i) == Severity.LOW.value)
+        info = sum(1 for i in issues if sev_val(i) == Severity.INFO.value)
+        security = sum(1 for i in issues if type_val(i)
+                       == IssueType.SECURITY.value)
+        refactor = sum(1 for i in issues if type_val(i)
+                       == IssueType.REFACTORING.value)
 
         lines = [
             "## 🐇 DeepRabbit AI Code Review",
@@ -137,8 +146,27 @@ class CommentGenerator:
 
         if issues:
             lines.append("### Top issues")
+            # Include short blocks for top issues with code snippets and suggestions
             for i in issues[:10]:
-                lines.append(f"- **{i.title}** — {i.severity.value.upper()}")
+                sev = sev_val(i).upper()
+                type_emoji = ISSUE_TYPE_EMOJI.get(
+                    i.type, "") if hasattr(i, "type") else ""
+                location = f"{i.file}:{i.line}" if i.file and i.line else (
+                    i.file or "")
+                lines.append(f"- **{i.title}** — {sev} — {location}")
+                if i.description:
+                    lines.append(f"\n    {i.description}")
+                if i.code_snippet:
+                    lines.append("\n**Relevant code:**")
+                    lines.append(f"```\n{i.code_snippet[:400]}\n```")
+                if i.suggestion:
+                    suggestion_code = self._extract_suggestion_code(
+                        i.suggestion)
+                    if suggestion_code:
+                        lines.append("\n**Suggested fix:**")
+                        lines.append(f"```suggestion\n{suggestion_code}\n```")
+                    else:
+                        lines.append(f"\n**Suggestion:** {i.suggestion}")
 
         return "\n".join(lines)
 
