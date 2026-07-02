@@ -1,5 +1,4 @@
 """GitHub API client for PR interactions."""
-
 import base64
 from typing import Any
 
@@ -57,19 +56,21 @@ class GitHubClient:
         # Build review body
         body = self._build_review_body(summary)
 
-        # GitHub API limit: use review comments for inline, overall review for summary
         try:
             client = await self._get_httpx_client()
-            repo = self.github.get_repo(repo_name)
 
-            # Build the review payload for the GraphQL/REST API
+            # Build review comments using line+side (not position)
+            # This avoids 422 "Position could not be resolved" errors
             review_comments = []
             for c in comments[: settings.max_comments_per_pr]:
-                review_comments.append({
-                    "path": c.path,
-                    "body": c.body,
-                    "position": c.line if c.side == "RIGHT" else c.original_line,
-                })
+                if c.line and c.line > 0:
+                    comment_payload = {
+                        "path": c.path,
+                        "body": c.body,
+                        "line": c.line,
+                        "side": c.side if c.side in ("LEFT", "RIGHT") else "RIGHT",
+                    }
+                    review_comments.append(comment_payload)
 
             endpoint = f"/repos/{repo_name}/pulls/{pr_number}/reviews"
             payload = {
@@ -80,6 +81,17 @@ class GitHubClient:
             }
 
             resp = await client.post(endpoint, json=payload)
+
+            if resp.status_code == 422:
+                # Inline comment positions failed — post review without comments
+                logger.warning(
+                    "github.review_inline_failed",
+                    status=422,
+                    msg="Retrying without inline comments",
+                )
+                payload["comments"] = []
+                resp = await client.post(endpoint, json=payload)
+
             resp.raise_for_status()
             data = resp.json()
 
@@ -92,8 +104,7 @@ class GitHubClient:
             return {"id": data.get("id"), "state": data.get("state")}
 
         except httpx.HTTPStatusError as e:
-            logger.error("github.review_error",
-                         status=e.response.status_code, body=e.response.text[:500])
+            logger.error("github.review_error", status=e.response.status_code, body=e.response.text[:500])
             # Fallback: post as regular comment
             fallback = pr.create_issue_comment(body)
             return {"fallback_comment_id": fallback.id}
@@ -123,7 +134,7 @@ class GitHubClient:
                     "commit_id": commit_sha,
                     "path": comment.path,
                     "line": comment.line,
-                    "side": comment.side,
+                    "side": comment.side if comment.side in ("LEFT", "RIGHT") else "RIGHT",
                 }
                 resp = await client.post(endpoint, json=payload)
                 resp.raise_for_status()
@@ -135,6 +146,7 @@ class GitHubClient:
                     line=comment.line,
                     error=str(e),
                 )
+
         return posted
 
     async def update_labels(
@@ -146,6 +158,7 @@ class GitHubClient:
         """Add relevant labels to the PR based on review results."""
         pr = await self.get_pr(repo_name, pr_number)
         labels = []
+
         if summary.security_count > 0:
             labels.append("deeprabbit-security")
         if summary.refactoring_suggestions > 0:
@@ -177,9 +190,11 @@ class GitHubClient:
             f"- 🔧 Refactoring: {summary.refactoring_suggestions}",
             "",
         ]
+
         if summary.overall_comment:
             lines.append("### Details")
             lines.append(summary.overall_comment[:4000])
+
         return "\n".join(lines)
 
     def _map_rating_to_event(self, rating: str) -> str:
