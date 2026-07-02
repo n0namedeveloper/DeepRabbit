@@ -1,0 +1,18 @@
+services:
+  deeprabbit:
+    build: .
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      DEEPRABBIT_API_KEY: ${DEEPRABBIT_API_KEY:-}
+      PORT: ${PORT:-8000}
+      HOST: 0.0.0.0
+      LOG_LEVEL: INFO
+    healthcheck:
+      test: [ "CMD", "curl", "-fsS", "http://localhost:8000/healthz" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped

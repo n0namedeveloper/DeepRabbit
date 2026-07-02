@@ -1,0 +1,25 @@
+name: DeepRabbit Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: DeepRabbit Code Review
+        uses: ./
+        with:
+          api_url: https://api.deeprabbit.dev/review
+          api_key: ${{ secrets.DEEPRABBIT_API_KEY }}
+          deepseek_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
