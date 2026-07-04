@@ -224,35 +224,7 @@ class CommentGenerator:
             f"- ℹ️ Info: {info}",
             f"- 🔒 Security: {security}",
             f"- 🔧 Refactoring: {refactor}",
-            "",
         ]
-
-        if issues:
-            lines.append("### Top issues")
-            for i in issues[:10]:
-                sev = _normalize_sev(i.severity).upper()
-                location = f"{i.file}:{i.line}" if i.file and i.line else (
-                    i.file or "")
-                lines.append(f"- **{i.title}** — {sev} — {location}")
-                if i.description:
-                    lines.append(f"    {i.description}")
-                if i.code_snippet:
-                    lines.append("    **Relevant code:**")
-                    lines.append(f"    ```")
-                    lines.append(self._trim_snippet(
-                        i.code_snippet, 240, indent="    "))
-                    lines.append("    ```")
-                if i.suggestion:
-                    suggestion_code = self._extract_suggestion_code(
-                        i.suggestion)
-                    if suggestion_code:
-                        lines.append("    **Suggested fix:**")
-                        lines.append("    ```suggestion")
-                        lines.append(self._trim_snippet(
-                            suggestion_code, 240, indent="    "))
-                        lines.append("    ```")
-                    else:
-                        lines.append(f"    **Suggestion:** {i.suggestion}")
 
         return "\n".join(lines)
 

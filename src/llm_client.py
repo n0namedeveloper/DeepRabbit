@@ -260,7 +260,7 @@ class DeepSeekClient:
         user: str,
         max_tokens: int | None = None,
     ) -> str:
-        """Make a chat completion request with JSON mode (#9)."""
+        """Make a chat completion request with STREAMING for pipeline visibility."""
         payload: dict = {
             "model": self.model,
             "messages": [
@@ -269,17 +269,53 @@ class DeepSeekClient:
             ],
             "temperature": self.temperature,
             "max_tokens": max_tokens or self.max_tokens,
-            "response_format": {"type": "json_object"},  # Issue #9: JSON Mode
+            "response_format": {"type": "json_object"},
+            "stream": True,  # <-- ВКЛЮЧАЕМ СТРИМИНГ
         }
 
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                resp = await self.client.post("/chat/completions", json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-                return data["choices"][0]["message"]["content"]
+                logger.info("llm.request_started",
+                            attempt=attempt+1, model=self.model)
+
+                full_response = []
+                last_log_time = time.monotonic()
+
+                # Используем потоковый запрос
+                async with self.client.stream("POST", "/chat/completions", json=payload) as resp:
+                    resp.raise_for_status()
+
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:].strip()
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                                content = chunk["choices"][0]["delta"].get(
+                                    "content", "")
+                                if content:
+                                    full_response.append(content)
+
+                                    # Логируем каждые 5 секунд, чтобы видеть, что процесс жив
+                                    current_time = time.monotonic()
+                                    if current_time - last_log_time > 5.0:
+                                        logger.info("llm.pipeline_receiving",
+                                                    chars_received=sum(
+                                                        len(c) for c in full_response),
+                                                    preview=content.strip())
+                                        last_log_time = current_time
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                continue
+
+                logger.info("llm.request_finished", total_chars=sum(
+                    len(c) for c in full_response))
+                return "".join(full_response)
+
             except httpx.HTTPStatusError as e:
+                # Читаем ошибку (при стриминге text уже прочитан)
+                await e.response.aread()
                 body = e.response.text[:500]
                 if e.response.status_code == 429 and attempt < max_retries - 1:
                     wait = 5 * (2 ** attempt)
@@ -299,11 +335,7 @@ class DeepSeekClient:
                                    attempt=attempt + 1, wait_s=wait)
                     await asyncio.sleep(wait)
                     continue
-                return '{"summary": "Timeout error: AI failed to respond in time.", "rating": "comment", "issues": []}'
-            # ---------------------------
-            except (KeyError, IndexError) as e:
-                logger.error("llm.response_parse_error", error=str(e))
-                raise
+                return '{"summary": "Pipeline failed: Network timeout.", "rating": "comment", "issues": []}'
 
     def _parse_review_response(self, text: str) -> tuple[ReviewSummary, list[Issue]]:
         """Parse JSON review response from LLM."""
