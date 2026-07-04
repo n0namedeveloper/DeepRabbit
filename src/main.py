@@ -134,8 +134,8 @@ async def review_pr(
                 for pf in await asyncio.to_thread(list, pr_files):
                     # Filter deleted files and binary files
                     # Check if filename is binary
-                    from scripts.send_review import _is_binary
-                    if pf.status == 'removed' or _is_binary(pf.filename):
+                    from src.security_scanner import _is_binary_file
+                    if pf.status == 'removed' or _is_binary_file(pf.filename):
                         continue
                     
                     fetched_files.append({

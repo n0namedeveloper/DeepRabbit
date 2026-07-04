@@ -335,7 +335,7 @@ class DeepSeekClient:
                                    attempt=attempt + 1, wait_s=wait)
                     await asyncio.sleep(wait)
                     continue
-                return '{"summary": "Pipeline failed: Network timeout.", "rating": "comment", "issues": []}'
+                raise
 
     def _parse_review_response(self, text: str) -> tuple[ReviewSummary, list[Issue]]:
         """Parse JSON review response from LLM."""
