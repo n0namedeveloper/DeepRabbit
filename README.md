@@ -18,7 +18,8 @@
 - 📝 **Review Summary** — posts an overall review summary comment on the PR
 
 
-<img width="786" height="791" alt="review" src="https://github.com/user-attachments/assets/0c75c3c7-3693-4b33-a933-c917a34e0989" />
+<img width="713" height="768" alt="image" src="https://github.com/user-attachments/assets/40dd5eab-0b42-406b-8c87-35a7401517c8" />
+
 
 ## 🏗️ Architecture
 
