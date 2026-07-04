@@ -290,6 +290,17 @@ class DeepSeekClient:
                 logger.error("llm.http_error",
                              status=e.response.status_code, body=body)
                 raise
+            except httpx.RequestError as e:
+                logger.error("llm.network_error", error=type(
+                    e).__name__, details=str(e))
+                if attempt < max_retries - 1:
+                    wait = 5 * (2 ** attempt)
+                    logger.warning("llm.retrying_after_network_error",
+                                   attempt=attempt + 1, wait_s=wait)
+                    await asyncio.sleep(wait)
+                    continue
+                return '{"summary": "Timeout error: AI failed to respond in time.", "rating": "comment", "issues": []}'
+            # ---------------------------
             except (KeyError, IndexError) as e:
                 logger.error("llm.response_parse_error", error=str(e))
                 raise
