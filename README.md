@@ -26,10 +26,6 @@
 <img width="713" height="768" alt="image" src="https://github.com/user-attachments/assets/40dd5eab-0b42-406b-8c87-35a7401517c8" />
 
 
-
-<img width="713" height="768" alt="image" src="https://github.com/user-attachments/assets/40dd5eab-0b42-406b-8c87-35a7401517c8" />
-
-
 ## 🏗️ Architecture
 
 ```
