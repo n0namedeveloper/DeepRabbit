@@ -107,6 +107,7 @@ class ReviewRequest(BaseModel):
     github_token: str
     review_level: str = "normal"
     llm_base_url: str = ""
+    server_side_fetch: bool = False
 
 
 class ReviewResult(BaseModel):

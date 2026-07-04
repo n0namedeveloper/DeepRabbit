@@ -1,4 +1,4 @@
-"""GitHub API client for PR interactions."""
+"""GitHub API client for PR interactions with retry/backoff (#6)."""
 import asyncio
 import base64
 from typing import Any
@@ -13,9 +13,14 @@ from src.models import LineComment, ReviewSummary
 
 logger = structlog.get_logger()
 
+# Retry/backoff configuration for transient GitHub API failures (#6)
+_RETRYABLE: set[int] = {500, 502, 503, 504}
+_RETRY_ATTEMPTS = 3
+_RETRY_BASE_DELAY = 1.0  # seconds (exponential: 1, 2, 4)
+
 
 class GitHubClient:
-    """GitHub API client with PR review capabilities."""
+    """GitHub API client with PR review capabilities and resilient HTTP."""
 
     def __init__(self, token: str | None = None):
         self.token = token or settings.github_token
@@ -38,10 +43,45 @@ class GitHubClient:
             )
         return self._httpx_client
 
+    # -------------------------------------------------------------------
+    # Issue #6: wrapped httpx helpers with retry + exponential backoff
+    # -------------------------------------------------------------------
+    async def _request_with_retry(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        json: Any = None,
+    ) -> httpx.Response:
+        """Execute an HTTP request against the GitHub API with retry."""
+        client = await self._get_httpx_client()
+        for attempt in range(_RETRY_ATTEMPTS):
+            try:
+                resp = await client.request(method, endpoint, json=json)
+                if resp.status_code in _RETRYABLE and attempt < _RETRY_ATTEMPTS - 1:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        "github.retry_transient",
+                        status=resp.status_code,
+                        attempt=attempt + 1,
+                        delay=delay,
+                        endpoint=endpoint,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                return resp
+            except httpx.HTTPError:
+                if attempt < _RETRY_ATTEMPTS - 1:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+        return resp  # type: ignore[return-value]
+
     async def get_pr(self, repo_name: str, pr_number: int) -> PullRequest:
-        """Get a pull request object."""
-        repo = self.github.get_repo(repo_name)
-        return repo.get_pull(pr_number)
+        """Get a pull request object via thread to avoid blocking."""
+        repo = await asyncio.to_thread(self.github.get_repo, repo_name)
+        return await asyncio.to_thread(repo.get_pull, pr_number)
 
     async def post_review(
         self,
@@ -51,27 +91,23 @@ class GitHubClient:
         summary: ReviewSummary,
         comments: list[LineComment],
     ) -> dict:
-        """Post a review with inline comments to the PR."""
+        """Post a review with inline comments to the PR (with retry)."""
         pr = await self.get_pr(repo_name, pr_number)
 
         # Build review body
         body = self._build_review_body(summary)
 
         try:
-            client = await self._get_httpx_client()
-
             # Build review comments using line+side (not position)
-            # This avoids 422 "Position could not be resolved" errors
             review_comments = []
             for c in comments[: settings.max_comments_per_pr]:
                 if c.line and c.line > 0:
-                    comment_payload = {
+                    review_comments.append({
                         "path": c.path,
                         "body": c.body,
                         "line": c.line,
                         "side": c.side if c.side in ("LEFT", "RIGHT") else "RIGHT",
-                    }
-                    review_comments.append(comment_payload)
+                    })
 
             endpoint = f"/repos/{repo_name}/pulls/{pr_number}/reviews"
             payload = {
@@ -81,7 +117,7 @@ class GitHubClient:
                 "comments": review_comments,
             }
 
-            resp = await client.post(endpoint, json=payload)
+            resp = await self._request_with_retry("POST", endpoint, json=payload)
 
             if resp.status_code == 422:
                 # Inline comment positions failed — post review without comments
@@ -91,7 +127,7 @@ class GitHubClient:
                     msg="Retrying without inline comments",
                 )
                 payload["comments"] = []
-                resp = await client.post(endpoint, json=payload)
+                resp = await self._request_with_retry("POST", endpoint, json=payload)
 
             resp.raise_for_status()
             data = resp.json()
@@ -102,18 +138,19 @@ class GitHubClient:
                 repo=repo_name,
                 comments=len(review_comments),
             )
-            return {"id": data.get("id"), "state": data.get("state")}
+            return {"id": data.get("id"), "state": data.get("state"), "comments_posted": len(review_comments)}
 
         except httpx.HTTPStatusError as e:
-            logger.error("github.review_error",
-                         status=e.response.status_code, body=e.response.text[:500])
-            # Fallback: post as regular comment
-            fallback = pr.create_issue_comment(body)
+            logger.error(
+                "github.review_error",
+                status=e.response.status_code,
+                body=e.response.text[:500],
+            )
+            fallback = await asyncio.to_thread(pr.create_issue_comment, body)
             return {"fallback_comment_id": fallback.id}
         except Exception as e:
             logger.error("github.review_error", error=str(e))
-            # Fallback: post as regular comment
-            fallback = pr.create_issue_comment(body)
+            fallback = await asyncio.to_thread(pr.create_issue_comment, body)
             return {"fallback_comment_id": fallback.id}
 
     async def post_inline_comments(
@@ -123,10 +160,9 @@ class GitHubClient:
         commit_sha: str,
         comments: list[LineComment],
     ) -> int:
-        """Post individual review comments on lines."""
+        """Post individual review comments on lines (with retry)."""
         pr = await self.get_pr(repo_name, pr_number)
         posted = 0
-        client = await self._get_httpx_client()
 
         for comment in comments[: settings.max_comments_per_pr]:
             try:
@@ -138,7 +174,7 @@ class GitHubClient:
                     "line": comment.line,
                     "side": comment.side if comment.side in ("LEFT", "RIGHT") else "RIGHT",
                 }
-                resp = await client.post(endpoint, json=payload)
+                resp = await self._request_with_retry("POST", endpoint, json=payload)
                 resp.raise_for_status()
                 posted += 1
             except Exception as e:
@@ -159,7 +195,7 @@ class GitHubClient:
     ) -> list[str]:
         """Add relevant labels to the PR based on review results."""
         pr = await self.get_pr(repo_name, pr_number)
-        labels = []
+        labels: list[str] = []
 
         if summary.security_count > 0:
             labels.append("deeprabbit-security")
@@ -171,7 +207,7 @@ class GitHubClient:
             labels.append("deeprabbit-changes-requested")
 
         if labels:
-            pr.add_to_labels(*labels)
+            await asyncio.to_thread(pr.add_to_labels, *labels)
         return labels
 
     async def post_detail_comments(
@@ -188,26 +224,27 @@ class GitHubClient:
                 await asyncio.to_thread(pr.create_issue_comment, block)
                 posted += 1
             except Exception as e:
-                logger.warning("github.post_detail_failed",
-                               pr=pr_number, error=str(e))
+                logger.warning(
+                    "github.post_detail_failed", pr=pr_number, error=str(e)
+                )
         return posted
 
     def _build_review_body(self, summary: ReviewSummary) -> str:
         """Build markdown review body."""
         lines = [
-            "## 🐇 DeepRabbit AI Code Review",
+            "## \ud83d\udc07 DeepRabbit AI Code Review",
             "",
-            f"### Summary",
+            "### Summary",
             f"{summary.summary}",
             "",
             "### Statistics",
-            f"- 🔴 Critical: {summary.critical_count}",
-            f"- 🟠 High: {summary.high_count}",
-            f"- 🟡 Medium: {summary.medium_count}",
-            f"- 🟢 Low: {summary.low_count}",
-            f"- ℹ️ Info: {summary.info_count}",
-            f"- 🔒 Security: {summary.security_count}",
-            f"- 🔧 Refactoring: {summary.refactoring_suggestions}",
+            f"- \ud83d\udd34 Critical: {summary.critical_count}",
+            f"- \ud83d\udfe0 High: {summary.high_count}",
+            f"- \ud83d\udfe1 Medium: {summary.medium_count}",
+            f"- \ud83d\udfe2 Low: {summary.low_count}",
+            f"- \u2139\ufe0f Info: {summary.info_count}",
+            f"- \ud83d\udd12 Security: {summary.security_count}",
+            f"- \ud83d\udd27 Refactoring: {summary.refactoring_suggestions}",
             "",
         ]
 

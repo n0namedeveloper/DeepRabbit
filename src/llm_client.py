@@ -12,6 +12,99 @@ from src.models import Issue, IssueType, ReviewLevel, ReviewSummary, Severity
 
 logger = structlog.get_logger()
 
+CHUNK_SIZE = 30000  # characters per LLM call (#5 diff chunking)
+
+
+def _split_diff_by_files(diff: str, max_chunk: int = CHUNK_SIZE) -> list[str]:
+    """Split a large git diff into chunks by file boundaries.
+
+    Each chunk contains complete diff sections for one or more files.
+    Falls back to hard splits when a single file diff is larger than max_chunk.
+    """
+    if len(diff) <= max_chunk:
+        return [diff]
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+
+    # Diff format: each file starts with "diff --git a/..."
+    for line in diff.split("\n"):
+        if line.startswith("diff --git "):
+            # Start new file block
+            if current and current_len > 0:
+                chunks.append("\n".join(current))
+            current = [line]
+            current_len = len(line) + 1
+        else:
+            current.append(line)
+            current_len += len(line) + 1
+
+        # If current chunk exceeds max, split it anyway
+        if current_len >= max_chunk:
+            chunks.append("\n".join(current))
+            current = []
+            current_len = 0
+
+    if current and current_len > 0:
+        chunks.append("\n".join(current))
+
+    # Merge small chunks to avoid too many API calls
+    merged: list[str] = []
+    buf: list[str] = []
+    buf_len = 0
+    for ch in chunks:
+        if buf_len + len(ch) <= max_chunk:
+            buf.append(ch)
+            buf_len += len(ch)
+        else:
+            if buf:
+                merged.append("\n".join(buf))
+            buf = [ch]
+            buf_len = len(ch)
+    if buf:
+        merged.append("\n".join(buf))
+
+    return merged if merged else [diff]
+
+
+def _combine_issues(
+    all_issues: list[dict],
+    all_summaries: list[dict],
+) -> tuple[dict, list[dict]]:
+    """Merge results from multiple LLM chunks into a single summary + issues list."""
+    # Use the first non-empty summary as base
+    base_summary = {}
+    for s in all_summaries:
+        if s and s.get("summary"):
+            base_summary = s
+            break
+    if not base_summary:
+        base_summary = {"summary": "Review completed.", "rating": "comment"}
+
+    # Determine overall rating: worst of all chunks
+    rating_order = {"approve": 0, "comment": 1, "request_changes": 2}
+    worst_rating = "comment"
+    worst_score = 1
+    for s in all_summaries:
+        r = s.get("rating", "comment") if isinstance(s, dict) else "comment"
+        if rating_order.get(r, 1) > worst_score:
+            worst_score = rating_order[r]
+            worst_rating = r
+    base_summary["rating"] = worst_rating
+
+    # Deduplicate issues by file+line+title
+    seen = set()
+    unique_issues: list[dict] = []
+    for issue in all_issues:
+        key = (issue.get("file", ""), issue.get(
+            "line", 0), issue.get("title", ""))
+        if key not in seen:
+            seen.add(key)
+            unique_issues.append(issue)
+
+    return base_summary, unique_issues
+
 
 class DeepSeekClient:
     """Client for DeepSeek LLM API."""
@@ -43,19 +136,103 @@ class DeepSeekClient:
         review_level: str = ReviewLevel.NORMAL,
         repo_info: str = "",
     ) -> tuple[ReviewSummary, list[Issue]]:
-        """Send diff to LLM and parse review results."""
+        """Send diff to LLM and parse review results.
+
+        Large diffs are split into chunks by file boundaries (#5).
+        Each chunk gets its own LLM call, results are aggregated.
+        """
         from src.prompt_templates import SYSTEM_PROMPT, build_review_prompt
 
-        prompt = build_review_prompt(
-            diff, files, file_contents, review_level, repo_info)
+        chunks = _split_diff_by_files(diff)
+        logger.info("llm.chunking", total_chunks=len(
+            chunks), diff_size=len(diff))
 
-        start = time.monotonic()
-        response_text = await self._chat_completion(SYSTEM_PROMPT, prompt)
-        duration_ms = int((time.monotonic() - start) * 1000)
+        all_issue_dicts: list[dict] = []
+        all_summaries: list[dict] = []
 
-        logger.info("llm.review.completed", duration_ms=duration_ms,
-                    response_length=len(response_text))
-        summary, issues = self._parse_review_response(response_text)
+        for idx, chunk_diff in enumerate(chunks):
+            prompt = build_review_prompt(
+                chunk_diff, files, file_contents, review_level, repo_info,
+                chunk_index=idx,
+                total_chunks=len(chunks),
+            )
+            start = time.monotonic()
+            response_text = await self._chat_completion(SYSTEM_PROMPT, prompt)
+            duration_ms = int((time.monotonic() - start) * 1000)
+
+            logger.info(
+                "llm.chunk_completed",
+                chunk=idx + 1,
+                total=len(chunks),
+                duration_ms=duration_ms,
+                response_length=len(response_text),
+            )
+
+            summary, issues = self._parse_review_response(response_text)
+            all_issue_dicts.extend(
+                [i.model_dump() if isinstance(i, Issue) else i for i in issues]
+            )
+            all_summaries.append(
+                summary.model_dump() if isinstance(summary, ReviewSummary) else summary
+            )
+
+        base_summary, unique_issue_dicts = _combine_issues(
+            all_issue_dicts, all_summaries)
+
+        summary = ReviewSummary(
+            summary=base_summary.get("summary", "Review completed."),
+            issues_found=0,
+            rating=base_summary.get("rating", "comment"),
+            overall_comment=base_summary.get("overall_comment"),
+        )
+
+        issues: list[Issue] = []
+        for item in unique_issue_dicts:
+            try:
+                issue = Issue(
+                    type=IssueType(item.get("type", "code_smell")),
+                    severity=Severity(item.get("severity", "medium")),
+                    title=item.get("title", "Untitled issue"),
+                    description=item.get("description", ""),
+                    file=item.get("file"),
+                    line=item.get("line"),
+                    end_line=item.get("end_line"),
+                    suggestion=item.get("suggestion"),
+                    code_snippet=item.get("code_snippet"),
+                    category=item.get("category"),
+                    confidence=item.get("confidence", 0.8),
+                )
+                issues.append(issue)
+            except (ValueError, TypeError) as e:
+                logger.warning("llm.issue_parse_error",
+                               error=str(e), item=str(item)[:150])
+                continue
+
+        # Fill summary counts
+        summary.issues_found = len(issues)
+        summary.critical_count = sum(
+            1 for i in issues if i.severity == Severity.CRITICAL)
+        summary.high_count = sum(
+            1 for i in issues if i.severity == Severity.HIGH)
+        summary.medium_count = sum(
+            1 for i in issues if i.severity == Severity.MEDIUM)
+        summary.low_count = sum(
+            1 for i in issues if i.severity == Severity.LOW)
+        summary.info_count = sum(
+            1 for i in issues if i.severity == Severity.INFO)
+        summary.security_count = sum(
+            1 for i in issues if i.type == IssueType.SECURITY)
+        summary.refactoring_suggestions = sum(
+            1 for i in issues if i.type == IssueType.REFACTORING
+        )
+
+        logger.info(
+            "llm.parse_complete",
+            issues_found=len(issues),
+            critical=summary.critical_count,
+            high=summary.high_count,
+            summary_preview=summary.summary[:80],
+        )
         return summary, issues
 
     async def generate_inline_comment(
@@ -83,8 +260,8 @@ class DeepSeekClient:
         user: str,
         max_tokens: int | None = None,
     ) -> str:
-        """Make a chat completion request."""
-        payload = {
+        """Make a chat completion request with JSON mode (#9)."""
+        payload: dict = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system},
@@ -92,6 +269,7 @@ class DeepSeekClient:
             ],
             "temperature": self.temperature,
             "max_tokens": max_tokens or self.max_tokens,
+            "response_format": {"type": "json_object"},  # Issue #9: JSON Mode
         }
 
         max_retries = 3

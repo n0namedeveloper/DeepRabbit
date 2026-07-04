@@ -37,6 +37,9 @@ dependencies = [
     "orjson>=3.10.0",
 ]
 
+[project.scripts]
+deeprabbit = "src.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3.0",
@@ -57,7 +60,8 @@ Repository = "https://github.com/deeprabbbit-ai/deeprabbit"
 Issues = "https://github.com/deeprabbbit-ai/deeprabbit/issues"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["src", "src.*"]
 
 [tool.ruff]
 target-version = "py311"

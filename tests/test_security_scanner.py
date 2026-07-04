@@ -13,7 +13,7 @@ class TestSecurityScanner:
         issues = security_scanner._scan_secrets("test.py", sample_insecure_code)
         secrets = [i for i in issues if i.category == "secret_leak"]
         assert len(secrets) > 0
-        assert any("API Key" in s.title for s in secrets)
+        assert any("API Key" in s.description for s in secrets)
 
     def test_detects_sql_injection(self, security_scanner):
         code = "query = f'SELECT * FROM users WHERE id = {user_id}'"

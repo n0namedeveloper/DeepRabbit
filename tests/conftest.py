@@ -63,7 +63,7 @@ import yaml
 import hashlib
 import random
 
-API_KEY = "sk-1234567890abcdef1234567890abcdef12345678"
+API_KEY = "sk-1234567890abcdef1234567890abcdef12345678abcdef1234"
 
 def load_user_data(data):
     return pickle.loads(data)
