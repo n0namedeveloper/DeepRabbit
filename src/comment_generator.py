@@ -1,5 +1,6 @@
 """Generate GitHub review comments from detected issues."""
 import structlog
+from collections import Counter
 
 from src.config import settings
 from src.models import Issue, IssueType, LineComment, Severity
@@ -25,6 +26,26 @@ ISSUE_TYPE_EMOJI = {
     IssueType.DOCUMENTATION: "📓",
     IssueType.COMPLEXITY: "🧩",
 }
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers reused across comment-generation methods
+# ---------------------------------------------------------------------------
+
+def _normalize_sev(sv) -> str:
+    """Normalise a Severity enum or string to its lowercase value."""
+    v = getattr(sv, "value", None)
+    if v is None:
+        v = str(sv)
+    return str(v).lower()
+
+
+def _normalize_type(tp) -> str:
+    """Normalise an IssueType enum or string to its lowercase value."""
+    v = getattr(tp, "value", None)
+    if v is None:
+        v = str(tp)
+    return str(v).lower()
 
 
 class CommentGenerator:
@@ -101,39 +122,29 @@ class CommentGenerator:
 
         return "\n".join(lines)
 
-    def generate_summary_comment(self, issues: list[Issue], overall_comment: str | None) -> str:
-        """Generate an overall markdown summary for the review.
-
-        Includes counts by severity and security/refactor highlights.
-        """
-        # Normalize enums/strings once and count in a single pass
-        from collections import Counter
-
-        def _normalize_sev(sv) -> str:
-            v = getattr(sv, "value", None)
-            if v is None:
-                v = str(sv)
-            return str(v).lower()
-
-        def _normalize_type(tp) -> str:
-            v = getattr(tp, "value", None)
-            if v is None:
-                v = str(tp)
-            return str(v).lower()
-
+    def _count_issues(self, issues: list[Issue]) -> tuple[Counter, Counter]:
+        """Count issues by severity and type, returning (sev_counter, type_counter)."""
         sev_counter: Counter = Counter()
         type_counter: Counter = Counter()
         for it in issues:
             sev_counter[_normalize_sev(it.severity)] += 1
             type_counter[_normalize_type(it.type)] += 1
+        return sev_counter, type_counter
 
-        critical = sev_counter.get(Severity.CRITICAL.value, 0)
-        high = sev_counter.get(Severity.HIGH.value, 0)
-        medium = sev_counter.get(Severity.MEDIUM.value, 0)
-        low = sev_counter.get(Severity.LOW.value, 0)
-        info = sev_counter.get(Severity.INFO.value, 0)
-        security = type_counter.get(IssueType.SECURITY.value, 0)
-        refactor = type_counter.get(IssueType.REFACTORING.value, 0)
+    def generate_summary_comment(self, issues: list[Issue], overall_comment: str | None) -> str:
+        """Generate an overall markdown summary for the review.
+
+        Includes counts by severity and security/refactor highlights.
+        """
+        sev_counter, type_counter = self._count_issues(issues)
+
+        critical = sev_counter.get("critical", 0)
+        high = sev_counter.get("high", 0)
+        medium = sev_counter.get("medium", 0)
+        low = sev_counter.get("low", 0)
+        info = sev_counter.get("info", 0)
+        security = type_counter.get("security", 0)
+        refactor = type_counter.get("refactoring", 0)
 
         lines = [
             "## 🐇 DeepRabbit AI Code Review",
@@ -170,9 +181,11 @@ class CommentGenerator:
                         i.suggestion)
                     if suggestion_code:
                         lines.append("\n**Suggested fix:**")
-                        lines.append(f"```suggestion\n{suggestion_code}\n```")
+                        lines.append(
+                            f"```suggestion\n{suggestion_code}\n```")
                     else:
-                        lines.append(f"\n**Suggestion:** {i.suggestion}")
+                        lines.append(
+                            f"\n**Suggestion:** {i.suggestion}")
 
             # Add a short "Summary of Key Findings" with bullets
             lines.append("")
@@ -187,25 +200,7 @@ class CommentGenerator:
 
     def generate_summary_body(self, issues: list[Issue], overall_comment: str | None) -> str:
         """Generate a compact summary body without detailed fix blocks."""
-        from collections import Counter
-
-        def _normalize_sev(sv) -> str:
-            v = getattr(sv, "value", None)
-            if v is None:
-                v = str(sv)
-            return str(v).lower()
-
-        def _normalize_type(tp) -> str:
-            v = getattr(tp, "value", None)
-            if v is None:
-                v = str(tp)
-            return str(v).lower()
-
-        sev_counter: Counter = Counter()
-        type_counter: Counter = Counter()
-        for it in issues:
-            sev_counter[_normalize_sev(it.severity)] += 1
-            type_counter[_normalize_type(it.type)] += 1
+        sev_counter, type_counter = self._count_issues(issues)
 
         critical = sev_counter.get(Severity.CRITICAL.value, 0)
         high = sev_counter.get(Severity.HIGH.value, 0)

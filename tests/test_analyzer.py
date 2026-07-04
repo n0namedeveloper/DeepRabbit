@@ -9,8 +9,67 @@ from src.models import IssueType, Severity
 class TestCodeAnalyzer:
     """Code analyzer test suite."""
 
-    def test_detects_long_functions(self, code_analyzer, sample_python_code):
-        issues = code_analyzer.analyze({"test.py": sample_python_code})
+    def test_detects_long_functions(self, code_analyzer):
+        code = """
+def short(): pass
+
+def very_long_function():
+    'Docstring.'
+    a = 1
+    b = 2
+    c = 3
+    d = 4
+    e = 5
+    f = 6
+    g = 7
+    h = 8
+    i = 9
+    j = 10
+    k = 11
+    l = 12
+    m = 13
+    n = 14
+    o = 15
+    p = 16
+    q = 17
+    r = 18
+    s = 19
+    t = 20
+    u = 21
+    v = 22
+    w = 23
+    x = 24
+    y = 25
+    z = 26
+    aa = 27
+    ab = 28
+    ac = 29
+    ad = 30
+    ae = 31
+    af = 32
+    ag = 33
+    ah = 34
+    ai = 35
+    aj = 36
+    ak = 37
+    al = 38
+    am = 39
+    an = 40
+    ao = 41
+    ap = 42
+    aq = 43
+    ar = 44
+    as_ = 45
+    at_ = 46
+    au = 47
+    av = 48
+    aw = 49
+    ax = 50
+    ay = 51
+    az = 52
+    return a
+        """
+        issues = code_analyzer.analyze({"test.py": code})
         long_funcs = [i for i in issues if i.category == "god_function"]
         assert len(long_funcs) > 0
         assert any("Overly Long Function" in i.title for i in issues)
@@ -41,6 +100,16 @@ def complex_func(x):
                         print(i)
                     except:
                         pass
+    if x > 0:
+        if x > 1:
+            if x > 2:
+                pass
+    if x:
+        if x > 0:
+            for _ in range(2):
+                while True:
+                    if True:
+                        break
     return x
         """
         issues = code_analyzer.analyze({"test.py": code})

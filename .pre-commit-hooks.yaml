@@ -1,0 +1,8 @@
+# .pre-commit-hooks.yaml
+- id: deeprabbit-review
+  name: DeepRabbit Code Review
+  description: AI-powered automated code review on git commit
+  entry: deeprabbit review
+  language: python
+  files: \.(py|js|ts|jsx|tsx|java|go|sql)$
+  pass_filenames: false

@@ -1,6 +1,11 @@
 """DeepRabbit FastAPI server entrypoint."""
 
+import asyncio
+import signal
+import uuid
 import time
+from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 
 import structlog
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -21,6 +26,27 @@ app = FastAPI(
     description="AI-powered autonomous code review API",
     version="1.0.0",
 )
+
+# ---------------------------------------------------------------------------
+# Correlation ID middleware (issue #12)
+# ---------------------------------------------------------------------------
+request_id_ctx: ContextVar[str] = ContextVar("request_id", default="")
+
+
+@app.middleware("http")
+async def correlation_id_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[JSONResponse]]
+) -> JSONResponse:
+    """Inject a correlation id into every request and attach it to structlog."""
+    rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
+    request_id_ctx.set(rid)
+    structlog.contextvars.bind_contextvars(request_id=rid)
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = rid
+        return response
+    finally:
+        structlog.contextvars.unbind_contextvars("request_id")
 
 
 async def verify_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> str:
@@ -80,23 +106,100 @@ async def review_pr(
             level=payload.review_level,
         )
 
-        # ---------- Phase 1: Static Security Scan ----------
-        security_scanner = SecurityScanner()
-        security_issues = security_scanner.scan_files(payload.file_contents)
-        logger.info("security.scan_complete",
-                    issues_found=len(security_issues))
+        # ---------- Issue #2: max_files_per_review enforcement ----------
+        if len(payload.files) > settings.max_files_per_review:
+            raise HTTPException( 
+                status_code=400,
+                detail=f"Too many files ({len(payload.files)}). "
+                f"Limit is {settings.max_files_per_review}.",
+            )
 
-        # ---------- Phase 2: Code Quality Analysis ----------
+        # ---------- Issue #11: Server-side Fetch implementation ----------
+        github = GitHubClient(token=payload.github_token)
+        
+        if payload.server_side_fetch:
+            logger.info("server_side_fetch.started", repo=payload.repository, pr=payload.pr_number)
+            try:
+                pr = await github.get_pr(payload.repository, payload.pr_number)
+                
+                # Fetch files
+                fetched_files = []
+                fetched_contents = {}
+                
+                # pygithub doesn't directly offer a fast raw diff string as an attribute of PullRequest,
+                # but we can get it via the API or by requesting the diff media type.
+                # However, pygithub files list provides the patches and filenames.
+                pr_files = await asyncio.to_thread(pr.get_files)
+                # Note: We use list conversion or loop inside to_thread or cleanly iterate
+                for pf in await asyncio.to_thread(list, pr_files):
+                    # Filter deleted files and binary files
+                    # Check if filename is binary
+                    from scripts.send_review import _is_binary
+                    if pf.status == 'removed' or _is_binary(pf.filename):
+                        continue
+                    
+                    fetched_files.append({
+                        "filename": pf.filename,
+                        "status": pf.status
+                    })
+                    
+                    # Fetch content of the head_sha version
+                    try:
+                        repo = await asyncio.to_thread(github.github.get_repo, payload.repository)
+                        content_file = await asyncio.to_thread(repo.get_contents, pf.filename, ref=payload.head_sha)
+                        if content_file and not isinstance(content_file, list):
+                            raw_content = content_file.decoded_content.decode('utf-8', errors='replace')
+                            fetched_contents[pf.filename] = raw_content
+                    except Exception as e:
+                        logger.warning("server_side_fetch.content_failed", file=pf.filename, error=str(e))
+                
+                # Construct a simulated diff from the file patches if needed
+                simulated_diff = ""
+                for pf in await asyncio.to_thread(list, pr_files):
+                    if pf.patch:
+                        simulated_diff += f"diff --git a/{pf.filename} b/{pf.filename}\n"
+                        simulated_diff += f"--- a/{pf.filename}\n+++ b/{pf.filename}\n"
+                        simulated_diff += pf.patch + "\n"
+                
+                payload.files = fetched_files
+                payload.file_contents = fetched_contents
+                payload.diff = simulated_diff
+                
+                logger.info("server_side_fetch.success", files_fetched=len(fetched_files))
+            except Exception as e:
+                logger.error("server_side_fetch.failed", error=str(e))
+                raise HTTPException(status_code=500, detail=f"Server-side fetch failed: {str(e)}")
+
+        # ---------- Phase 1 & 2: Parallel static analysis (issue #15) ----------
+        async def run_security_scan() -> list:
+            return await asyncio.to_thread(
+                SecurityScanner().scan_files, payload.file_contents
+            )
+
+        async def run_code_analyzer() -> list:
+            return await asyncio.to_thread(
+                CodeAnalyzer().analyze, payload.file_contents
+            )
+
+        security_issues, quality_issues = await asyncio.gather(
+            run_security_scan(), run_code_analyzer()
+        )
+
+        logger.info(
+            "static_analysis.complete",
+            security_issues=len(security_issues),
+            quality_issues=len(quality_issues),
+        )
+
+        # Complexity metrics (run synced after analyze for now, but non-blocking)
         code_analyzer = CodeAnalyzer()
-        quality_issues = code_analyzer.analyze(payload.file_contents)
-        complexity_metrics = code_analyzer.get_complexity_metrics(
-            payload.file_contents)
-        logger.info("quality.scan_complete", issues_found=len(quality_issues))
-
+        complexity_metrics = await asyncio.to_thread(
+            code_analyzer.get_complexity_metrics, payload.file_contents
+        )
         if complexity_metrics:
             logger.debug("complexity.metrics", files=len(complexity_metrics))
 
-        # ---------- Phase 3: LLM-Powered Review ----------
+        # ---------- Phase 3: LLM-Powered Review (with chunking - issue #5) ----------
         llm = DeepSeekClient(
             api_key=payload.deepseek_api_key,
             base_url=payload.llm_base_url or settings.llm_base_url,
@@ -134,8 +237,8 @@ async def review_pr(
             detail_blocks = []
 
         # ---------- Phase 6: Post to GitHub ----------
-        github = GitHubClient(token=payload.github_token)
-        posted = await github.post_review(
+        # Re-use the existing github client instance
+        posted = await github.post_review( 
             repo_name=payload.repository,
             pr_number=payload.pr_number,
             commit_sha=payload.head_sha,
@@ -229,6 +332,44 @@ def _merge_issues(issues: list) -> list:
                       "medium": 2, "low": 3, "info": 4}
     unique.sort(key=lambda i: severity_order.get(i.severity.value, 5))
     return unique
+
+
+# ---------------------------------------------------------------------------
+# Background task tracking for graceful shutdown (issue #13)
+# ---------------------------------------------------------------------------
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _on_signal() -> None:
+    """Cancel all tracked background tasks when shutdown signal is received."""
+    logger.info("shutdown.signal_received", tasks=len(_background_tasks))
+    for task in list(_background_tasks):
+        if not task.done():
+            task.cancel()
+
+
+def _setup_graceful_shutdown() -> None:
+    """Register SIGTERM/SIGINT handlers for graceful shutdown."""
+    try:
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, _on_signal)
+            except NotImplementedError:
+                # Windows does not support add_signal_handler for SIGTERM
+                signal.signal(sig, lambda signum, frame: _on_signal())
+    except RuntimeError:
+        # No running event loop (e.g. during import or test collection)
+        # Fall back to standard signal module registration
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, lambda signum, frame: _on_signal())
+            except ValueError:
+                # Not in main thread, ignore
+                pass
+
+
+_setup_graceful_shutdown()
 
 
 if __name__ == "__main__":

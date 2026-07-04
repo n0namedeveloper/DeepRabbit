@@ -1,5 +1,7 @@
 """Configuration for DeepRabbit."""
 
+import os
+
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -48,33 +50,25 @@ class Settings(BaseSettings):
 
 
 def _load_settings() -> Settings:
-    """Load application settings without crashing module import in test/dev environments."""
-    try:
-        return Settings()
-    except ValidationError:
-        return Settings.model_construct(
-            deepseek_api_key="dev-deepseek-key",
-            github_token="dev-github-token",
-            deeprabbit_api_key="dev-deeprabbit-key",
-            port=8000,
-            host="0.0.0.0",
-            workers=1,
-            llm_model="deepseek-chat",
-            llm_base_url="https://api.deepseek.com/v1",
-            llm_timeout=120,
-            max_tokens=4096,
-            temperature=0.1,
-            review_level="normal",
-            max_files_per_review=20,
-            max_lines_per_file=500,
-            max_diff_size=100000,
-            github_api_url="https://api.github.com",
-            max_comments_per_pr=50,
-            max_detail_comments_per_pr=10,
-            max_comment_snippet_length=500,
-            log_level="INFO",
-            structured_logs=True,
+    """Load application settings.
+
+    In production, all required environment variables MUST be present.
+    In dev/test mode (DEEPRABBIT_DEV_MODE=1), missing required vars
+    fall back to safe dev defaults instead of raising ValidationError.
+
+    Issue #16: model_construct() silent fallback removed. Tests use
+    conftest fixtures that either set DEEPRABBIT_DEV_MODE=1 (so missing
+    required env vars are replaced by defaults) or monkeypatch
+    individual fields on a Settings instance pre-loaded with defaults.
+    """
+    if os.getenv("DEEPRABBIT_DEV_MODE"):
+        return Settings(
+            deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", "dev-deepseek-key"),
+            github_token=os.getenv("GITHUB_TOKEN", "dev-github-token"),
+            deeprabbit_api_key=os.getenv("DEEPRABBIT_API_KEY", "dev-deeprabbit-key"),
         )
+    # Production: strict validation, crash loudly if env vars are missing
+    return Settings()
 
 
 settings = _load_settings()

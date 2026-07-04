@@ -7,6 +7,30 @@ from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
+# ---------------------------------------------------------------------------
+# Binary / non-text file extensions that send_review should skip (#3)
+# ---------------------------------------------------------------------------
+BINARY_EXTENSIONS = {
+    '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.webp', '.bmp', '.tiff',
+    '.woff', '.woff2', '.ttf', '.eot', '.otf',
+    '.jar', '.zip', '.tar', '.gz', '.bz2', '.xz', '.7z', '.rar',
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.exe', '.dll', '.so', '.dylib', '.o', '.a', '.lib',
+    '.pyc', '.pyo', '.pyd',
+    '.whl', '.egg', '.deb', '.rpm',
+    '.mp3', '.mp4', '.avi', '.mov', '.wav', '.flac',
+    '.min.js', '.min.css',
+}
+
+MAX_FILES_PER_REVIEW = int(os.environ.get('MAX_FILES_PER_REVIEW', '20'))
+MAX_FILE_SIZE_MB = 2
+
+
+def _is_binary(filename: str) -> bool:
+    """Check if a file extension should be excluded from review."""
+    name = filename.lower()
+    return any(name.endswith(ext) for ext in BINARY_EXTENSIONS)
+
 
 def get_diff():
     result = subprocess.run(
@@ -28,17 +52,30 @@ def get_files():
             parts = line.split('\t')
             status = parts[0]
             filename = parts[1]
+            # Skip deleted and binary files (#3)
+            if status == 'D' or _is_binary(filename):
+                print(f"⏭️  Skipping binary/deleted file: {filename}")
+                continue
             files.append({'status': status, 'filename': filename})
     return files
 
 
 def get_file_content(filename):
+    """Fetch file content with size limit enforced."""
     try:
         result = subprocess.run(
             ['git', 'show', f"{os.environ['HEAD_SHA']}:{filename}"],
             capture_output=True, text=True
         )
-        return result.stdout if result.returncode == 0 else None
+        if result.returncode != 0:
+            return None
+        content = result.stdout
+        # Skip files over size limit
+        if len(content.encode('utf-8')) > MAX_FILE_SIZE_MB * 1024 * 1024:
+            print(
+                f"⏭️  Skipping large file: {filename} ({len(content)} bytes)")
+            return None
+        return content
     except:
         return None
 
@@ -106,13 +143,22 @@ def main():
         print(f"❌ API health check failed for {health_url}: {exc}")
         sys.exit(1)
 
-    diff = get_diff()
-    files = get_files()
-    file_contents = {}
-    for f in files:
-        content = get_file_content(f['filename'])
-        if content:
-            file_contents[f['filename']] = content
+    # Issue #11: Support server_side_fetch option
+    server_side_fetch = os.environ.get('SERVER_SIDE_FETCH', 'false').lower() in ('true', '1', 'yes')
+
+    if server_side_fetch:
+        print("ℹ️ Server-side fetch enabled. Server will retrieve git diff and contents.")
+        diff = ""
+        files = []
+        file_contents = {}
+    else:
+        diff = get_diff()
+        files = get_files()
+        file_contents = {}
+        for f in files:
+            content = get_file_content(f['filename'])
+            if content:
+                file_contents[f['filename']] = content
 
     payload = {
         'repository': os.environ['REPO'],
@@ -126,6 +172,7 @@ def main():
         'github_token': os.environ['GITHUB_TOKEN'],
         'review_level': os.environ['REVIEW_LEVEL'],
         'llm_base_url': os.environ.get('LLM_BASE_URL', ''),
+        'server_side_fetch': server_side_fetch,  # tell server to fetch internally if true
     }
 
     headers = {

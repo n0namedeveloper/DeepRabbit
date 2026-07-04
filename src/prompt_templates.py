@@ -1,9 +1,21 @@
-"""LLM prompt templates for code review."""
+"""LLM prompt templates for code review.
+
+Issue #10: Supports loading .deeprabbit/prompt.md from the repository root
+(fetched via GitPython or passed as repo_root) with fallback to built-in prompts.
+"""
+
+import os
+
+import structlog
 
 from src.models import ReviewLevel
 
+logger = structlog.get_logger()
 
-SYSTEM_PROMPT = """You are DeepRabbit, an expert code reviewer with 15+ years of experience.
+# -------------------------------------------------------------------
+# Built-in default prompts (fallback when no .deeprabbit/prompt.md)
+# -------------------------------------------------------------------
+_DEFAULT_SYSTEM_PROMPT = """You are DeepRabbit, an expert code reviewer with 15+ years of experience.
 Your job is to perform thorough, professional code reviews with the following priorities:
 
 1. SECURITY (highest priority) - Find vulnerabilities, injection risks, auth issues, secret leaks
@@ -22,40 +34,18 @@ Rules:
 - Never hallucinate issues - if unsure, say so
 """
 
-
-def build_review_prompt(
-    diff: str,
-    files: list[dict],
-    file_contents: dict[str, str],
-    review_level: str = ReviewLevel.NORMAL,
-    repo_info: str = "",
-) -> str:
-    """Build the main review prompt."""
-    level_instructions = {
-        ReviewLevel.LIGHT: "Focus only on critical/high severity issues. Skip style/ formatting comments.",
-        ReviewLevel.NORMAL: "Cover security, bugs, code smells, and significant convention violations.",
-        ReviewLevel.STRICT: "Be thorough. Flag even minor issues. Check every function for documentation and type hints.",
-    }
-
-    files_summary = []
-    for f in files:
-        fname = f.get("filename", "unknown")
-        status = f.get("status", "modified")
-        content = file_contents.get(fname, "")
-        lines = content.count("\n") if content else 0
-        files_summary.append(f"- {fname} ({status}, {lines} lines)")
-
-    prompt = f"""## Context
+_DEFAULT_REVIEW_PROMPT = """
+## Context
 Repository: {repo_info}
-  Review Level: {review_level.value if hasattr(review_level, 'value') else review_level}
-  Instructions: {level_instructions.get(review_level, level_instructions[ReviewLevel.NORMAL])}
+  Review Level: {review_level}
+  Instructions: {level_instructions}
 
 ## Changed Files
-{chr(10).join(files_summary)}
+{files_summary}
 
 ## Git Diff
 ```diff
-{diff[:80000]}
+{diff}
 ```
 
 ## Task
@@ -78,7 +68,7 @@ Perform a comprehensive code review of this Pull Request. Return your findings i
       "line": 42,
       "end_line": 45,
       "suggestion": "How to fix (with code example if applicable)",
-            "code_snippet": "REQUIRED: copy the exact problematic line(s) of code from the diff verbatim, max 3 lines",
+      "code_snippet": "REQUIRED: copy the exact problematic line(s) of code from the diff verbatim, max 3 lines",
       "category": "injection|race_condition|duplicate|naming|missing_docs|etc"
     }}
   ],
@@ -100,6 +90,143 @@ Requirements:
 - Limit to the most impactful 15-20 issues
 - If no issues found, return empty issues array and positive summary
 """
+
+# -------------------------------------------------------------------
+# Load external prompt from .deeprabbit/prompt.md (#10)
+# -------------------------------------------------------------------
+def _load_external_prompt(repo_root: str | None = None) -> str | None:
+    """Try to load a custom SYSTEM_PROMPT from the repo's .deeprabbit/prompt.md.
+
+    The file can contain either a single prompt (used as system prompt) or
+    sections delimited by ## --- markers: the first section is the system
+    prompt, the second is the review prompt template.
+
+    Returns None if the file does not exist or cannot be read.
+    """
+    if not repo_root:
+        return None
+    prompt_path = os.path.join(repo_root, ".deeprabbit", "prompt.md")
+    if not os.path.isfile(prompt_path):
+        return None
+    try:
+        with open(prompt_path, encoding="utf-8") as f:
+            content = f.read()
+        logger.info("prompt.loaded_external", path=prompt_path)
+        return content
+    except (OSError, UnicodeDecodeError) as e:
+        logger.warning("prompt.load_external_failed", path=prompt_path, error=str(e))
+        return None
+
+
+# Global caches populated on first use
+_SYSTEM_PROMPT: str | None = None
+_REVIEW_TEMPLATE: str | None = None
+
+
+def get_system_prompt(repo_root: str | None = None) -> str:
+    """Return the active system prompt (external > built-in).
+
+    Cached on first call; pass repo_root only on the first invocation.
+    """
+    global _SYSTEM_PROMPT
+    if _SYSTEM_PROMPT is not None:
+        return _SYSTEM_PROMPT
+    external = None
+    if repo_root:
+        external = _load_external_prompt(repo_root)
+    if external:
+        # External file may have sections separated by ## ---
+        parts = external.split("## ---", 1)
+        _SYSTEM_PROMPT = parts[0].strip()
+        if len(parts) > 1:
+            global _REVIEW_TEMPLATE
+            _REVIEW_TEMPLATE = parts[1].strip()
+        return _SYSTEM_PROMPT
+    _SYSTEM_PROMPT = _DEFAULT_SYSTEM_PROMPT
+    return _SYSTEM_PROMPT
+
+
+def get_review_template(repo_root: str | None = None) -> str:
+    """Return the active review prompt template (external > built-in).
+
+    Cached on first call; pass repo_root only on the first invocation.
+    """
+    global _REVIEW_TEMPLATE
+    if _REVIEW_TEMPLATE is not None:
+        return _REVIEW_TEMPLATE
+    external = None
+    if repo_root:
+        external = _load_external_prompt(repo_root)
+    if external:
+        parts = external.split("## ---", 1)
+        if len(parts) > 1:
+            _REVIEW_TEMPLATE = parts[1].strip()
+            return _REVIEW_TEMPLATE
+    _REVIEW_TEMPLATE = _DEFAULT_REVIEW_PROMPT
+    return _REVIEW_TEMPLATE
+
+
+# Expose a single SYSTEM_PROMPT constant for backward compatibility
+SYSTEM_PROMPT = _DEFAULT_SYSTEM_PROMPT
+
+
+def build_review_prompt(
+    diff: str,
+    files: list[dict],
+    file_contents: dict[str, str],
+    review_level: str = ReviewLevel.NORMAL,
+    repo_info: str = "",
+    chunk_index: int = 0,
+    total_chunks: int = 1,
+    repo_root: str | None = None,
+) -> str:
+    """Build the main review prompt."""
+    level_instructions = {
+        ReviewLevel.LIGHT: "Focus only on critical/high severity issues. Skip style/ formatting comments.",
+        ReviewLevel.NORMAL: "Cover security, bugs, code smells, and significant convention violations.",
+        ReviewLevel.STRICT: "Be thorough. Flag even minor issues. Check every function for documentation and type hints.",
+    }
+
+    files_summary = []
+    for f in files:
+        fname = f.get("filename", "unknown")
+        status = f.get("status", "modified")
+        content = file_contents.get(fname, "")
+        lines = content.count("\n") if content else 0
+        files_summary.append(f"- {fname} ({status}, {lines} lines)")
+
+    # Build file summary list
+    files_summary_lines = []
+    for f in files:
+        fname = f.get("filename", "unknown")
+        status = f.get("status", "modified")
+        content = file_contents.get(fname, "")
+        lines = content.count("\n") if content else 0
+        files_summary_lines.append(f"- {fname} ({status}, {lines} lines)")
+
+    # Determine effective review level string
+    level_str = review_level.value if hasattr(review_level, "value") else review_level
+    level_instr = level_instructions.get(review_level, level_instructions[ReviewLevel.NORMAL])
+
+    # Truncate diff to max_diff_size if still needed
+    from src.config import settings
+    effective_diff = diff[:settings.max_diff_size]
+
+    # Chunk info for context
+    chunk_suffix = ""
+    if total_chunks > 1:
+        chunk_suffix = f"\n[This is chunk {chunk_index + 1} of {total_chunks} review chunks.]"
+
+    # Use the active template (supports external from .deeprabbit/prompt.md)
+    template = get_review_template(repo_root)
+    prompt = template.format(
+        repo_info=repo_info,
+        review_level=level_str,
+        level_instructions=level_instr,
+        files_summary="\n".join(files_summary_lines),
+        diff=effective_diff,
+    )
+    prompt += chunk_suffix
     return prompt
 
 
