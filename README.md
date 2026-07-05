@@ -28,16 +28,59 @@
 
 ## 🏗️ Architecture
 
+DeepRabbit follows a modular **multi-phase review pipeline** orchestrated by a FastAPI server:
+
 ```
-┌─────────────┐     ┌──────────────┐      ┌─────────────────┐
-│  GitHub PR  │────▶│ GitHub Action│────▶│  FastAPI Server │
-└─────────────┘     └──────────────┘      └─────────────────┘
-                                                   │
-                                          ┌────────▼────────┐
-                                          │   DeepSeek V4   │
-                                          │   (LLM API)     │
-                                          └─────────────────┘
+┌──────────────┐     ┌────────────────┐     ┌─────────────────────┐
+│  GitHub PR   │────▶│  GitHub Action │────▶│  FastAPI Server     │
+│  (webhook)   │     │  send_review   │     │  POST /review       │
+└──────────────┘     └────────────────┘     └──────────┬──────────┘
+                                                       │
+                          ┌────────────────────────────┼────────────────────────────┐
+                          │                            │                            │
+                 ┌────────▼────────┐          ┌────────▼────────┐          ┌────────▼────────┐
+                 │  Security       │          │  Code Quality   │          │  DeepSeek V4    │
+                 │  Scanner        │          │  Analyzer       │          │  (LLM API)      │
+                 │ (Phase 1)       │          │ (Phase 2)       │          │ (Phase 3)       │
+                 └────────┬────────┘          └────────┬────────┘          └────────┬────────┘
+                          │                            │                            │
+                          └────────────────────────────┼────────────────────────────┘
+                                                       │
+                                              ┌────────▼────────┐
+                                              │  Merge &        │
+                                              │  Deduplicate    │
+                                              │ (Phase 4)       │
+                                              └────────┬────────┘
+                                                       │
+                                              ┌────────▼────────┐
+                                              │  Comment        │
+                                              │  Generator      │
+                                              │ (Phase 5)       │
+                                              └────────┬────────┘
+                                                       │
+                                              ┌────────▼────────┐
+                                              │  GitHub PR      │
+                                              │  Post + Labels  │
+                                              │ (Phase 6)       │
+                                              └─────────────────┘
 ```
+
+### Review Pipeline (6 phases)
+
+1. **Server-side Fetch** (optional) — the server fetches PR diff and file contents directly via GitHub API, no need to send payload from the Action
+2. **Static Analysis** — `SecurityScanner` and `CodeAnalyzer` run **in parallel** (via `asyncio.gather`) for maximum throughput
+3. **LLM Review** — `DeepSeekClient` sends the diff to DeepSeek V4 with chunking support for large PRs, receives structured JSON with issues and refactoring suggestions
+4. **Merge & Deduplicate** — all issues from static analysis and LLM are deduplicated by `(file, line, title)` and sorted by severity (`critical` → `high` → `medium` → `low` → `info`)
+5. **Comment Generation** — `CommentGenerator` produces inline PR comments and a rich summary markdown with statistics
+6. **Post to GitHub** — results are posted as inline review comments + separate detailed suggestion blocks, and automatic labels are applied
+
+### Key Design Decisions
+
+- **Structured Logging** with `structlog` — every request gets a correlation ID (header `X-Request-ID`), all logs are JSON-formatted for observability
+- **Graceful Shutdown** — background tasks are tracked and cancelled on `SIGTERM`/`SIGINT`, compatible with Docker and Kubernetes
+- **API Key Authentication** — all `/review` requests require `X-API-Key` header
+- **Pydantic Models** — request/response validation with `ReviewRequest`, `ReviewResult`, `ReviewSummary`, and typed issue models
+- **Retry & Backoff** — `GitHubClient` uses `httpx` with exponential backoff for GitHub API resilience
 
 ## 🚀 Quick Start
 
@@ -66,6 +109,8 @@ jobs:
           deepseek_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
 
+> **Tip:** Enable `server_side_fetch: true` to let the server fetch PR changes directly — no need to include `actions/checkout` or pipe git diff in the workflow.
+
 #### Optional action inputs
 
 | Input | Description | Default |
@@ -76,7 +121,7 @@ jobs:
 ### 2. Self-Hosted Server (FastAPI)
 
 ```bash
-git clone https://github.com/your-org/deeprabbit.git
+git clone https://github.com/deeprabbbit-ai/deeprabbit.git
 cd deeprabbit
 
 # Install dependencies
@@ -97,16 +142,17 @@ uvicorn src.main:app --reload --port 8000
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `DEEPSEEK_API_KEY` | DeepSeek API key | ✅ |
-| `GITHUB_TOKEN` | GitHub Personal Access Token | ✅ |
-| `DEEPRABBIT_API_KEY` | API key for webhook protection | ✅ |
+| `GITHUB_TOKEN` | GitHub Personal Access Token (with repo & PR permissions) | ✅ |
+| `DEEPRABBIT_API_KEY` | API key protecting the `/review` endpoint | ✅ |
 | `PORT` | Server port (default: `8000`) | ❌ |
 | `HOST` | Server host (default: `0.0.0.0`) | ❌ |
-| `LOG_LEVEL` | Logging level (default: `INFO`) | ❌ |
-| `LLM_BASE_URL` | Custom LLM endpoint (default: DeepSeek) | ❌ |
-| `GITHUB_API_URL` | GitHub Enterprise URL (default: `https://api.github.com`) | ❌ |
-| `MAX_FILES_PER_REVIEW` | Maximum changed files per review | ❌ |
-| `MAX_COMMENTS_PER_PR` | Maximum inline comments per PR | ❌ |
-| `MAX_DETAIL_COMMENTS_PER_PR` | Maximum detail suggestion comments per PR | ❌ |
+| `LOG_LEVEL` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) | ❌ |
+| `WORKERS` | Uvicorn worker processes (default: `1`) | ❌ |
+| `LLM_BASE_URL` | Custom LLM endpoint for self-hosted or proxy (default: DeepSeek API) | ❌ |
+| `GITHUB_API_URL` | GitHub Enterprise Server URL (default: `https://api.github.com`) | ❌ |
+| `MAX_FILES_PER_REVIEW` | Maximum changed files per review — rejects PRs above this limit | ❌ |
+| `MAX_COMMENTS_PER_PR` | Maximum inline review comments posted per PR | ❌ |
+| `MAX_DETAIL_COMMENTS_PER_PR` | Maximum detail suggestion comments (separate blocks) per PR | ❌ |
 
 ### 4. Docker
 
@@ -115,7 +161,10 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-The API is available at `http://localhost:8000`, health check at `/healthz`.
+The API is available at `http://localhost:8000`:
+- `GET /` — service info and available endpoints
+- `GET /healthz` — health check (returns `{"status": "ok"}`)
+- `POST /review` — main review endpoint (requires `X-API-Key` header)
 
 ## 🖥️ CLI Tool
 
