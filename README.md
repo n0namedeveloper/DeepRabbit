@@ -28,42 +28,8 @@
 
 ## 🏗️ Architecture
 
-DeepRabbit follows a modular **multi-phase review pipeline** orchestrated by a FastAPI server:
+<img width="1249" height="639" alt="image" src="https://github.com/user-attachments/assets/4ca20ea4-1fac-4c60-91fb-14c4c6b3d9c6" />
 
-```
-┌──────────────┐     ┌────────────────┐     ┌─────────────────────┐
-│  GitHub PR   │────▶│  GitHub Action │────▶│  FastAPI Server     │
-│  (webhook)   │     │  send_review   │     │  POST /review       │
-└──────────────┘     └────────────────┘     └──────────┬──────────┘
-                                                       │
-                          ┌────────────────────────────┼────────────────────────────┐
-                          │                            │                            │
-                 ┌────────▼────────┐          ┌────────▼────────┐          ┌────────▼────────┐
-                 │  Security       │          │  Code Quality   │          │  DeepSeek V4    │
-                 │  Scanner        │          │  Analyzer       │          │  (LLM API)      │
-                 │ (Phase 1)       │          │ (Phase 2)       │          │ (Phase 3)       │
-                 └────────┬────────┘          └────────┬────────┘          └────────┬────────┘
-                          │                            │                            │
-                          └────────────────────────────┼────────────────────────────┘
-                                                       │
-                                              ┌────────▼────────┐
-                                              │  Merge &        │
-                                              │  Deduplicate    │
-                                              │ (Phase 4)       │
-                                              └────────┬────────┘
-                                                       │
-                                              ┌────────▼────────┐
-                                              │  Comment        │
-                                              │  Generator      │
-                                              │ (Phase 5)       │
-                                              └────────┬────────┘
-                                                       │
-                                              ┌────────▼────────┐
-                                              │  GitHub PR      │
-                                              │  Post + Labels  │
-                                              │ (Phase 6)       │
-                                              └─────────────────┘
-```
 
 ### Review Pipeline (6 phases)
 
