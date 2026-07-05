@@ -50,7 +50,7 @@ class TestSettings:
         assert settings.workers == 1
         assert settings.llm_model == "deepseek-chat"
         assert settings.llm_base_url == "https://api.deepseek.com/v1"
-        assert settings.llm_timeout == 120
+        assert settings.llm_timeout == 300
         assert settings.max_tokens == 4096
         assert settings.temperature == 0.1
         assert settings.review_level == "normal"

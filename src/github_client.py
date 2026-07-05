@@ -245,12 +245,7 @@ class GitHubClient:
             f"- \u2139\ufe0f Info: {summary.info_count}",
             f"- \ud83d\udd12 Security: {summary.security_count}",
             f"- \ud83d\udd27 Refactoring: {summary.refactoring_suggestions}",
-            "",
         ]
-
-        if summary.overall_comment:
-            lines.append("### Details")
-            lines.append(summary.overall_comment[:4000])
 
         return "\n".join(lines)
 

@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # LLM
     llm_model: str = "deepseek-chat"
     llm_base_url: str = "https://api.deepseek.com/v1"
-    llm_timeout: int = 120
+    llm_timeout: int = 300
     max_tokens: int = 4096
     temperature: float = 0.1
 
@@ -65,7 +65,8 @@ def _load_settings() -> Settings:
         return Settings(
             deepseek_api_key=os.getenv("DEEPSEEK_API_KEY", "dev-deepseek-key"),
             github_token=os.getenv("GITHUB_TOKEN", "dev-github-token"),
-            deeprabbit_api_key=os.getenv("DEEPRABBIT_API_KEY", "dev-deeprabbit-key"),
+            deeprabbit_api_key=os.getenv(
+                "DEEPRABBIT_API_KEY", "dev-deeprabbit-key"),
         )
     # Production: strict validation, crash loudly if env vars are missing
     return Settings()
