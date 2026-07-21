@@ -68,3 +68,7 @@ Thumbs.db
 
 # Docker
 .docker/
+
+.venv/
+
+__pycache__/
