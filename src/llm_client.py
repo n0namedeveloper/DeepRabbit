@@ -3,6 +3,34 @@ import json
 import re
 import time
 import asyncio
+import hashlib
+import os
+
+CACHE_DIR = ".deeprabbit_cache"
+
+def _get_cache_key(system: str, user: str) -> str:
+    content = f"{system}|{user}".encode("utf-8")
+    return hashlib.sha256(content).hexdigest()
+
+def _get_from_cache(key: str) -> str | None:
+    path = os.path.join(CACHE_DIR, f"{key}.json")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)["content"]
+        except Exception:
+            pass
+    return None
+
+def _save_to_cache(key: str, content: str):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    path = os.path.join(CACHE_DIR, f"{key}.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"content": content}, f)
+    except Exception:
+        pass
+
 
 import httpx
 import structlog
@@ -261,6 +289,12 @@ class DeepSeekClient:
         max_tokens: int | None = None,
     ) -> str:
         """Make a chat completion request with JSON mode (#9)."""
+        cache_key = _get_cache_key(system, user)
+        cached = _get_from_cache(cache_key)
+        if cached:
+            logger.info("llm.cache_hit")
+            return cached
+
         payload: dict = {
             "model": self.model,
             "messages": [
@@ -278,7 +312,9 @@ class DeepSeekClient:
                 resp = await self.client.post("/chat/completions", json=payload)
                 resp.raise_for_status()
                 data = resp.json()
-                return data["choices"][0]["message"]["content"]
+                content = data["choices"][0]["message"]["content"]
+                _save_to_cache(cache_key, content)
+                return content
             except httpx.HTTPStatusError as e:
                 body = e.response.text[:500]
                 if e.response.status_code == 429 and attempt < max_retries - 1:

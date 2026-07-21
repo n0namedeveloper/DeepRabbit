@@ -7,6 +7,7 @@ Supports: Python (AST+tree-sitter), JS/TS, Java, Go, SQL.
 import ast
 import math
 import re
+from typing import Any
 
 import structlog
 

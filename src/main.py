@@ -18,6 +18,7 @@ from src.github_client import GitHubClient
 from src.llm_client import DeepSeekClient
 from src.models import ReviewRequest, ReviewResult, ReviewSummary
 from src.security_scanner import SecurityScanner
+from src.dashboard import router as dashboard_router
 
 logger = structlog.get_logger()
 
@@ -26,6 +27,8 @@ app = FastAPI(
     description="AI-powered autonomous code review API",
     version="1.0.0",
 )
+
+app.include_router(dashboard_router)
 
 # ---------------------------------------------------------------------------
 # Correlation ID middleware (issue #12)
@@ -274,6 +277,15 @@ async def review_pr(
             issues_count=len(all_issues),
             message="Review completed successfully",
             processing_time_ms=processing_time_ms,
+        )
+
+        from src.dashboard import log_review
+        log_review(
+            repo=payload.repository,
+            pr_number=payload.pr_number,
+            status="completed",
+            issues_count=len(all_issues),
+            rating=llm_summary.rating
         )
 
         logger.info(

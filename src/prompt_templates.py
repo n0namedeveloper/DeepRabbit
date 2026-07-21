@@ -117,6 +117,22 @@ def _load_external_prompt(repo_root: str | None = None) -> str | None:
         logger.warning("prompt.load_external_failed", path=prompt_path, error=str(e))
         return None
 
+def _load_checklist(repo_root: str | None = None) -> str | None:
+    """Try to load a custom checklist from .deeprabbit/checklist.yaml."""
+    if not repo_root:
+        return None
+    checklist_path = os.path.join(repo_root, ".deeprabbit", "checklist.yaml")
+    if not os.path.isfile(checklist_path):
+        return None
+    try:
+        with open(checklist_path, encoding="utf-8") as f:
+            content = f.read()
+        logger.info("checklist.loaded", path=checklist_path)
+        return content
+    except Exception as e:
+        logger.warning("checklist.load_failed", path=checklist_path, error=str(e))
+        return None
+
 
 # Global caches populated on first use
 _SYSTEM_PROMPT: str | None = None
@@ -141,8 +157,14 @@ def get_system_prompt(repo_root: str | None = None) -> str:
         if len(parts) > 1:
             global _REVIEW_TEMPLATE
             _REVIEW_TEMPLATE = parts[1].strip()
-        return _SYSTEM_PROMPT
-    _SYSTEM_PROMPT = _DEFAULT_SYSTEM_PROMPT
+    else:
+        _SYSTEM_PROMPT = _DEFAULT_SYSTEM_PROMPT
+
+    # Append custom checklist if present
+    checklist = _load_checklist(repo_root) if repo_root else None
+    if checklist:
+        _SYSTEM_PROMPT += f"\n\nAdditionally, strictly verify the following custom checklist for this repository:\n{checklist}"
+
     return _SYSTEM_PROMPT
 
 
